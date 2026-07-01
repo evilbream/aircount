@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "wifi.c"
+        "sniffer.c"
+        "csi.c"
+        "mqtt.c"
+        "batch.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_wifi
+        nvs_flash
+        esp_netif
+        esp_event
+        mqtt
+        esp_timer
+        cjson
+        lwip
+)

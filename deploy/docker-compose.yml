@@ -1,0 +1,16 @@
+# Infra for AirCount. For now just the MQTT broker the ESP32 sensors
+# publish to; Kafka + the rest get added in later stages of the plan.
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: aircount-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # MQTT over WebSocket (optional, for a web client)
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+
+volumes:
+  mosquitto_data:

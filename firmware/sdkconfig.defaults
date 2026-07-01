@@ -1,0 +1,11 @@
+# Applied on first build (idf.py set-target esp32s3 && idf.py build).
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- Wi-Fi sensing: CSI must be enabled at the SDK level ---
+CONFIG_ESP_WIFI_CSI_ENABLED=y
+
+# A bit more headroom for JSON + HTTP in the batch task path.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_FREERTOS_HZ=1000
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

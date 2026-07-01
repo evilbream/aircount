@@ -1,0 +1,47 @@
+menu "AirCount Sensor Configuration"
+
+config AIRCOUNT_WIFI_SSID
+    string "Home Wi-Fi SSID"
+    default "myssid"
+    help
+        SSID of the home access point the sensor associates with.
+        Associating fixes the radio on the AP channel so promiscuous
+        sniffing and CSI capture share the same channel.
+
+config AIRCOUNT_WIFI_PASSWORD
+    string "Home Wi-Fi password"
+    default "mypassword"
+
+config AIRCOUNT_SENSOR_ID
+    string "Sensor / room id"
+    default "living-room"
+    help
+        Logical room name. Becomes the Kafka partition key downstream.
+
+config AIRCOUNT_MQTT_URI
+    string "MQTT broker URI"
+    default "mqtt://192.168.1.10:1883"
+    help
+        Broker the sensor publishes to, e.g. mqtt://host:1883 (or
+        mqtts:// for TLS). The Mosquitto broker in deploy/ listens here.
+
+config AIRCOUNT_MQTT_TOPIC_BASE
+    string "MQTT topic base"
+    default "aircount"
+    help
+        Topics are <base>/<sensor_id>/batch (QoS 1) and
+        <base>/<sensor_id>/status (retained, used as Last Will).
+
+config AIRCOUNT_WINDOW_MS
+    int "Aggregation window (ms)"
+    default 5000
+    range 1000 60000
+    help
+        How often a batch (devices + CSI motion score) is sent.
+
+config AIRCOUNT_MAX_DEVICES
+    int "Max unique devices per window"
+    default 128
+    range 16 512
+
+endmenu
