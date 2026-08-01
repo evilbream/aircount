@@ -1,4 +1,9 @@
 .vscode
-IMPLEMENTATION_PLAN.md
+PL.md
 README.md
 .idea
+testdata
+.env
+.env.local
+README2.MD
+/ingest-gateway

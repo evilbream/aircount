@@ -7,10 +7,56 @@ services:
     restart: unless-stopped
     ports:
       - "1883:1883"   # MQTT
-      - "9001:9001"   # MQTT over WebSocket (optional, for a web client)
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
 
+  # Web UI to browse the broker as a topic tree (http://localhost:4000).
+  mqtt-explorer:
+    image: smeagolworms4/mqtt-explorer:latest
+    container_name: aircount-mqtt-explorer
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    ports:
+      - "4000:4000"
+    volumes:
+      - mqtt_explorer_config:/mqtt-explorer/config
+
+  kafka:
+    image: apache/kafka:latest
+    container_name: aircount-kafka
+    restart: unless-stopped
+
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9092,DOCKER://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,DOCKER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: aircount-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: aircount
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
 volumes:
   mosquitto_data:
+  mqtt_explorer_config:
