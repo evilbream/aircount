@@ -1,0 +1,23 @@
+syntax = "proto3";
+package aircount.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "poltergeist/internal/pb/aircount/v1;aircountv1";
+
+message Device {
+    string mac = 1;
+    sint32 rssi = 2;
+    uint32 channel = 3;
+    uint32 frames = 4;
+    bool random_mac = 5;
+}
+
+message DetectionBatch {
+    string sensor_id = 1;
+    google.protobuf.Timestamp observed_at = 2;
+    google.protobuf.Duration  window      = 3;
+    uint64 uptime_ms = 4;
+    repeated Device devices = 5;
+}

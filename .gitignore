@@ -7,3 +7,5 @@ testdata
 .env.local
 README2.MD
 /ingest-gateway
+__debug_bin*
+terraform/

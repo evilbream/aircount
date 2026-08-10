@@ -9,7 +9,7 @@ import (
 )
 
 type Publisher interface {
-	PublishDevices(ctx context.Context, devices []domain.Device) error
+	PublishDevices(ctx context.Context, devices domain.DetectionBatch) error
 	PublishCSI(ctx context.Context, csi domain.CSIWindow) error
 }
 
@@ -39,20 +39,34 @@ func NewService(publisher Publisher, clock Clock) *Service {
 }
 
 func (s *Service) Ingest(ctx context.Context, b sensorwire.Batch) error {
+	var errDevices error
+	var errCSI error
+
 	at := s.clock.Now()
-	devices := make([]domain.Device, len(b.Devices))
 	window := time.Duration(b.WindowMS) * time.Millisecond
-	for i, d := range b.Devices {
-		devices[i] = domain.Device{
+	if len(b.Devices) > 0 {
+		devices := make([]domain.Device, len(b.Devices))
+		for i, d := range b.Devices {
+			devices[i] = domain.Device{
+				MAC:       d.MAC,
+				RSSI:      d.RSSI,
+				Channel:   d.Channel,
+				Frames:    d.Frames,
+				RandomMAC: d.Random,
+			}
+		}
+		deviceBatch := domain.DetectionBatch{
 			SensorID:   b.SensorID,
-			MAC:        d.MAC,
-			RSSI:       d.RSSI,
-			Channel:    d.Channel,
-			Frames:     d.Frames,
-			RandomMAC:  d.Random,
 			ObservedAt: at,
 			Window:     window,
+			UptimeMs:   b.UptimeMS,
+			Devices:    devices,
 		}
+		errDevices = s.publisher.PublishDevices(ctx, deviceBatch)
+	}
+
+	if b.CSI.Packets == 0 {
+		return errDevices
 	}
 
 	csi := domain.CSIWindow{
@@ -62,9 +76,9 @@ func (s *Service) Ingest(ctx context.Context, b sensorwire.Batch) error {
 		Subcarriers: b.CSI.Subcarriers,
 		ObservedAt:  at,
 		Window:      window,
+		UptimeMs:    b.UptimeMS,
 	}
 
-	errCSI := s.publisher.PublishCSI(ctx, csi)
-	errDevices := s.publisher.PublishDevices(ctx, devices)
+	errCSI = s.publisher.PublishCSI(ctx, csi)
 	return errors.Join(errCSI, errDevices)
 }

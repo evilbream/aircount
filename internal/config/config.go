@@ -11,14 +11,16 @@ import (
 )
 
 type Kafka struct {
-	Brokers []string // KAFKA_BROKERS, comma-separated
-	GroupID string   // KAFKA_GROUP_ID; consumers only (empty for pure producers)
+	Brokers           []string // KAFKA_BROKERS, comma-separated
+	GroupID           string   // KAFKA_GROUP_ID; consumers only (empty for pure producers)
+	SchemaRegistryURL string   // KAFKA_SCHEMA_REGISTRY_URL; optional, for Avro/Protobuf serialization
 }
 
 func LoadKafka(groupID string) Kafka {
 	return Kafka{
-		Brokers: system.EnvList("KAFKA_BROKERS", []string{"localhost:9092"}),
-		GroupID: groupID,
+		Brokers:           system.EnvList("KAFKA_BROKERS", []string{"localhost:9092"}),
+		GroupID:           groupID,
+		SchemaRegistryURL: system.EnvDefault("KAFKA_SCHEMA_REGISTRY_URL", "http://localhost:8081"),
 	}
 }
 

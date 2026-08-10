@@ -1,23 +1,31 @@
 package domain
 
-import "time"
+import (
+	"time"
+)
 
-type Device struct {
+type DetectionBatch struct {
 	SensorID   string
-	MAC        string
-	RSSI       int
-	Channel    int
-	Frames     int
-	RandomMAC  bool
 	ObservedAt time.Time
 	Window     time.Duration
+	UptimeMs   uint64
+	Devices    []Device
+}
+
+type Device struct {
+	MAC       string
+	RSSI      int32
+	Channel   uint32
+	Frames    uint32
+	RandomMAC bool
 }
 
 type CSIWindow struct {
 	SensorID    string
-	Packets     int
+	Packets     uint32
 	MotionScore float64
-	Subcarriers int
+	Subcarriers uint32
 	ObservedAt  time.Time
 	Window      time.Duration
+	UptimeMs    uint64
 }

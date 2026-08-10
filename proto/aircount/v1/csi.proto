@@ -1,0 +1,17 @@
+syntax = "proto3";
+package aircount.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "poltergeist/internal/pb/aircount/v1;aircountv1";
+
+message CSI {
+    string sensor_id = 1;
+    google.protobuf.Timestamp observed_at = 2;
+    google.protobuf.Duration  window      = 3;
+    uint32 packets     = 4;
+    uint32 subcarriers = 5;
+    double motion_score = 6;
+    uint64 uptime_ms = 7;
+}

@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"poltergeist/internal/config"
 	"poltergeist/internal/sensorwire"
+	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
@@ -71,7 +72,7 @@ func (c *Consumer) onCLientDisconnect(d *paho.Disconnect) {
 }
 
 func (c *Consumer) Start(ctx context.Context) error {
-	log.Debug().Msgf("starting MQTT consumer with config: %+v", c.cfg)
+	log.Info().Msgf("starting MQTT consumer with config: %+v", c.cfg)
 	u, err := url.Parse(c.cfg.Broker)
 	if err != nil {
 		return err
@@ -98,8 +99,9 @@ func (c *Consumer) Start(ctx context.Context) error {
 	if err := client.AwaitConnection(ctx); err != nil {
 		return err
 	}
-	<-client.Done()
-	client.Disconnect(ctx)
-	log.Debug().Msg("MQTT consumer stopped")
-	return nil
+	<-ctx.Done()
+	log.Info().Msg("shutting down MQTT consumer...")
+	dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return client.Disconnect(dctx)
 }

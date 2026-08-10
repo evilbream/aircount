@@ -7,31 +7,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"poltergeist/internal/domain"
 	"poltergeist/internal/httpapi"
 	"poltergeist/internal/ingest"
+	"poltergeist/internal/kafka"
 	"poltergeist/internal/mqtt"
 	"poltergeist/internal/platform"
 	"poltergeist/internal/system"
 	"syscall"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/sync/errgroup"
 )
-
-type NaivePublisher struct{}
-
-func (p *NaivePublisher) PublishDevices(ctx context.Context, devices []domain.Device) error {
-	zerolog.Ctx(ctx).Info().Msgf("Publishing %d devices", len(devices))
-	return nil
-}
-
-func (p *NaivePublisher) PublishCSI(ctx context.Context, csi domain.CSIWindow) error {
-	zerolog.Ctx(ctx).Info().Msgf("Publishing CSI data for sensor %s", csi.SensorID)
-	return nil
-}
 
 func main() {
 	if platform.Detect() == platform.Local {
@@ -45,8 +33,27 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to load config")
 	}
 
-	ingestService := ingest.NewService(&NaivePublisher{}, nil)
-	consumer := mqtt.NewConsumer(appCfg.MQTT, ingestService)
+	ctx := context.Background()
+
+	// init kafka, create publisher, ensure topics
+	kClient, err := kgo.NewClient(kgo.SeedBrokers(appCfg.Kafka.Brokers...))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create Kafka client")
+	}
+	defer kClient.Close()
+
+	if err := kafka.EnsureTopics(ctx, kClient, kafka.TopicRawDetections, kafka.TopicRawCSI); err != nil {
+		log.Fatal().Err(err).Msg("failed to ensure Kafka topics")
+	}
+
+	enc, err := kafka.NewEncoder(ctx, appCfg.Kafka.SchemaRegistryURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to create Kafka encoder")
+	}
+
+	publisher := kafka.NewProducer(kClient, enc)
+	ingestService := ingest.NewService(publisher, nil)
+	mqttConsumer := mqtt.NewConsumer(appCfg.MQTT, ingestService)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", appCfg.HTTPPort),
@@ -57,21 +64,25 @@ func main() {
 		//IdleTimeout:       60 * time.Second,
 	}
 
-	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	g, ctx := errgroup.WithContext(sigCtx)
 	g.Go(func() error {
 		log.Info().Msgf("HTTP server listening on %s", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Error().Err(err).Msg("failed to start HTTP server")
-			return err
+			log.Warn().Err(err).Msg("failed to start HTTP server")
+			return nil // server isnt critical, so we ignore the error and continue
 		}
 		return nil
 	})
 
 	g.Go(func() error {
-		return consumer.Start(ctx)
+		if err := mqttConsumer.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to start MQTT consumer")
+			return err
+		}
+		return nil
 	})
 
 	g.Go(func() error {
