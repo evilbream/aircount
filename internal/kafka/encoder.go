@@ -25,40 +25,67 @@ var (
 const (
 	csiMsgIndex            = 0
 	detectionBatchMsgIndex = 1
+	presenceRFMsgIndex     = 0
 )
 
 var confluentHeader sr.ConfluentHeader
+
+type schemaSpec struct {
+	proto   string
+	index   int
+	message proto.Message
+}
+
+var topicSchemas = map[Topic]schemaSpec{
+	TopicRawDetections: {proto: aircountv1.DetectionProto, index: detectionBatchMsgIndex, message: &aircountv1.DetectionBatch{}},
+	TopicRawCSI:        {proto: aircountv1.CSIProto, index: csiMsgIndex, message: &aircountv1.CSI{}},
+	TopicPresenceRF:    {proto: aircountv1.PresenceRFProto, index: presenceRFMsgIndex, message: &aircountv1.PresenceRF{}},
+}
 
 type Encoder struct {
 	serde *sr.Serde
 }
 
 // NewEncoder create encoder and registers schemas
-func NewEncoder(ctx context.Context, schemaRegistryURL string) (*Encoder, error) {
+func NewEncoder(ctx context.Context, schemaRegistryURL string, topic ...Topic) (*Encoder, error) {
+	if len(topic) == 0 {
+		return nil, fmt.Errorf("no topics provided for schema registration")
+	}
 	rcl, err := sr.NewClient(sr.URLs(schemaRegistryURL))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create schema registry client: %w", err)
 	}
-	detectionBatchSchemaID, err := createSchemaForTopic(ctx, rcl, TopicRawDetections, aircountv1.DetectionProto)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema for topic %s: %w", TopicRawDetections, err)
-	}
-	csiSchemaID, err := createSchemaForTopic(ctx, rcl, TopicRawCSI, aircountv1.CSIProto)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create schema for topic %s: %w", TopicRawCSI, err)
+
+	topicIds := make(map[Topic]int, len(topic))
+
+	for _, t := range topic {
+		spec, ok := topicSchemas[t]
+		if !ok {
+			return nil, fmt.Errorf("no schema defined for topic %s", t)
+		}
+		schemaID, err := createSchemaForTopic(ctx, rcl, t, spec.proto)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create schema for topic %s: %w", t, err)
+		}
+		topicIds[t] = schemaID
 	}
 
-	return newEncoder(detectionBatchSchemaID, csiSchemaID), nil
+	return newEncoder(topicIds)
 }
 
-// newEncoder wires the serde for already-known schema IDs. Split out of
-// NewEncoder so tests can build an encoder without a live registry.
-func newEncoder(detectionBatchSchemaID, csiSchemaID int) *Encoder {
+func newEncoder(topicIds map[Topic]int) (*Encoder, error) {
+	// Register the schemas for the provided topics
 	var s sr.Serde
-	registerSchema(&s, detectionBatchSchemaID, detectionBatchMsgIndex, &aircountv1.DetectionBatch{})
-	registerSchema(&s, csiSchemaID, csiMsgIndex, &aircountv1.CSI{})
 
-	return &Encoder{serde: &s}
+	for t, id := range topicIds {
+		spec, ok := topicSchemas[t]
+		if !ok {
+			return nil, fmt.Errorf("no schema defined for topic %s", t)
+		}
+		registerSchema(&s, id, spec.index, spec.message)
+	}
+
+	return &Encoder{serde: &s}, nil
 }
 
 func (e *Encoder) EncodeCSIWindow(csi *domain.CSIWindow) ([]byte, error) {
@@ -160,17 +187,56 @@ func (e *Encoder) DecodeDetectionBatch(data []byte) (*domain.DetectionBatch, err
 
 }
 
-func registerSchema[M proto.Message](s *sr.Serde, id, index int, msg M) {
+func (e *Encoder) EncodePresenceRF(p *domain.PresenceRF) ([]byte, error) {
+	pb := &aircountv1.PresenceRF{
+		SensorId:       p.SensorID,
+		MotionDetected: p.MotionDetected,
+		Score:          p.Score,
+		ObservedAt:     timestamppb.New(p.ObservedAt),
+		Window:         durationpb.New(p.Window),
+		Packets:        p.Packets,
+	}
+	return e.serde.Encode(pb)
+}
+
+func (e *Encoder) DecodePresenceRF(data []byte) (*domain.PresenceRF, error) {
+	payload, err := stripWireFormat(data, presenceRFMsgIndex)
+	if err != nil {
+		return nil, err
+	}
+	var m aircountv1.PresenceRF
+	if err := proto.Unmarshal(payload, &m); err != nil {
+		return nil, err
+	}
+	observedAt := m.GetObservedAt()
+	if observedAt == nil {
+		return nil, ErrMissingObservedAt
+	}
+	window := m.GetWindow()
+	if window == nil {
+		return nil, ErrMissingWindow
+	}
+	return &domain.PresenceRF{
+		SensorID:       m.GetSensorId(),
+		MotionDetected: m.GetMotionDetected(),
+		Score:          m.GetScore(),
+		ObservedAt:     observedAt.AsTime(),
+		Window:         window.AsDuration(),
+		Packets:        m.GetPackets(),
+	}, nil
+}
+
+func registerSchema(s *sr.Serde, id, index int, msg proto.Message) {
 	s.Register(id, msg,
 		sr.EncodeFn(func(a any) ([]byte, error) {
-			m, ok := a.(M)
+			m, ok := a.(proto.Message)
 			if !ok {
 				return nil, errors.New("invalid type for encoding")
 			}
 			return proto.Marshal(m)
 		}),
 		sr.DecodeFn(func(data []byte, a any) error {
-			m, ok := a.(M)
+			m, ok := a.(proto.Message)
 			if !ok {
 				return errors.New("invalid type for decoding")
 			}
@@ -182,15 +248,15 @@ func registerSchema[M proto.Message](s *sr.Serde, id, index int, msg M) {
 }
 
 func createSchemaForTopic(ctx context.Context, rcl *sr.Client, topicName Topic, schema string) (id int, err error) {
-	rawDetectionTopicValue := fmt.Sprintf("%s-value", topicName)
-	ss, err := rcl.CreateSchema(ctx, rawDetectionTopicValue, sr.Schema{
+	topicValue := fmt.Sprintf("%s-value", topicName)
+	ss, err := rcl.CreateSchema(ctx, topicValue, sr.Schema{
 		Type:   sr.TypeProtobuf,
 		Schema: schema,
 	})
 	if err != nil {
 		return 0, err
 	}
-	log.Info().Int("id", ss.ID).Str("name", rawDetectionTopicValue).Msg("registered schema")
+	log.Info().Int("id", ss.ID).Str("name", topicValue).Msg("registered schema")
 	return ss.ID, nil
 
 }

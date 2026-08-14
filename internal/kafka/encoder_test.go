@@ -24,7 +24,14 @@ const (
 
 func testEncoder(t *testing.T) *Encoder {
 	t.Helper()
-	return newEncoder(testDetectionSchemaID, testCSISchemaID)
+	enc, err := newEncoder(map[Topic]int{
+		TopicRawDetections: testDetectionSchemaID,
+		TopicRawCSI:        testCSISchemaID,
+	})
+	if err != nil {
+		t.Fatalf("newEncoder() error = %v", err)
+	}
+	return enc
 }
 
 // Decoded timestamps come back as UTC without a monotonic reading, so the
@@ -303,7 +310,13 @@ func TestDecodeRejectsWrongMessageType(t *testing.T) {
 func TestDecodeAcceptsForeignSchemaID(t *testing.T) {
 	enc := testEncoder(t)
 
-	other := newEncoder(testDetectionSchemaID+900, testCSISchemaID+900)
+	other, err := newEncoder(map[Topic]int{
+		TopicRawDetections: testDetectionSchemaID + 900,
+		TopicRawCSI:        testCSISchemaID + 900,
+	})
+	if err != nil {
+		t.Fatalf("newEncoder() error = %v", err)
+	}
 	want := domain.DetectionBatch{
 		SensorID:   "sensor-1",
 		ObservedAt: normalizedTime(time.Now()),

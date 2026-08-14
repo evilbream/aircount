@@ -7,3 +7,6 @@ var DetectionProto string
 
 //go:embed csi.proto
 var CSIProto string
+
+//go:embed presence.proto
+var PresenceRFProto string

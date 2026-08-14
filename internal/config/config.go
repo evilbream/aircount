@@ -33,6 +33,11 @@ func (k Kafka) Validate() error {
 			return fmt.Errorf("kafka: empty broker in list")
 		}
 	}
+
+	if strings.TrimSpace(k.SchemaRegistryURL) == "" {
+		return fmt.Errorf("kafka: schema registry url is empty (set KAFKA_SCHEMA_REGISTRY_URL)")
+	}
+
 	return nil
 }
 

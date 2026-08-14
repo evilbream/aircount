@@ -18,6 +18,7 @@ type Topic string
 const (
 	TopicRawDetections Topic = "raw.detections"
 	TopicRawCSI        Topic = "raw.csi"
+	TopicPresenceRF    Topic = "presence.rf"
 )
 
 var (
@@ -31,19 +32,21 @@ type TopicSpec struct {
 	Configs    map[string]*string
 }
 
+func makeConfig(retentionMs, cleanupPolicy, segmentMs string) map[string]*string {
+	return map[string]*string{
+		"retention.ms":   new(retentionMs),
+		"cleanup.policy": new(cleanupPolicy),
+		"segment.ms":     new(segmentMs),
+	}
+}
+
 var specs = map[Topic]TopicSpec{
 	TopicRawDetections: {Name: string(TopicRawDetections), Partitions: 3, Replicas: 1,
-		Configs: map[string]*string{
-			"retention.ms":   new("3600000"), // 1 hour
-			"cleanup.policy": new("delete"),
-			"segment.ms":     new("1800000"), // 30 minutes
-		}},
+		Configs: makeConfig("3600000", "delete", "1800000")}, // 1 hour retention, 30 minutes segment
 	TopicRawCSI: {Name: string(TopicRawCSI), Partitions: 3, Replicas: 1,
-		Configs: map[string]*string{
-			"retention.ms":   new("3600000"), // 1 hour
-			"cleanup.policy": new("delete"),
-			"segment.ms":     new("1800000"), // 30 minutes
-		}},
+		Configs: makeConfig("3600000", "delete", "1800000")}, // 1 hour retention, 30 minutes segment
+	TopicPresenceRF: {Name: string(TopicPresenceRF), Partitions: 1, Replicas: 1,
+		Configs: makeConfig("86400000", "delete", "21600000")}, // 24 hour retention, 6 hours segment
 }
 
 func EnsureTopics(ctx context.Context, cl *kgo.Client, topics ...Topic) error {
