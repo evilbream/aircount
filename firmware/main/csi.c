@@ -93,7 +93,10 @@ static void start_ping_traffic(void)
 
     ip_addr_t target;
     memset(&target, 0, sizeof(target));
-    ip_addr_set_ip4_u32(&target, ip.gw.addr);
+    // Via a pointer: the macro null-checks its argument, and gcc>=12
+    // errors on `&local` always being true (-Werror=address).
+    ip_addr_t *tp = &target;
+    ip_addr_set_ip4_u32(tp, ip.gw.addr);
 
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
     cfg.target_addr = target;

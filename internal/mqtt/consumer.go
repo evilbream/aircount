@@ -30,12 +30,20 @@ func NewConsumer(cfg config.MQTT, svc ingestService) *Consumer {
 
 func (c *Consumer) onConnection(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
 	log.Info().Msg("mqtt connection established")
-	if _, err := cm.Subscribe(context.Background(), &paho.Subscribe{
+	subAck, err := cm.Subscribe(context.Background(), &paho.Subscribe{
 		Subscriptions: []paho.SubscribeOptions{
 			{Topic: c.cfg.Topic, QoS: 1},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		log.Fatal().Err(err).Msg("failed to subscribe to topic")
+	}
+	for i, rc := range subAck.Reasons {
+		if rc >= 0x80 {
+			log.Error().Int("index", i).Int("reason_code", int(rc)).Str("topic", c.cfg.Topic).Msg("mqtt subscription rejected")
+			continue
+		}
+		log.Info().Int("index", i).Int("granted_qos", int(rc)).Str("topic", c.cfg.Topic).Msg("mqtt subscription acknowledged")
 	}
 	log.Info().Msgf("subscribed to topic %s", c.cfg.Topic)
 }
@@ -56,6 +64,13 @@ func (c *Consumer) onMessageReceived(ctx context.Context, pr paho.PublishReceive
 		// TODO: опубликовать в DLQ
 		return true, err
 	}
+	log.Info().
+		Str("topic", pr.Packet.Topic).
+		Str("sensor_id", batch.SensorID).
+		Int("window_ms", batch.WindowMS).
+		Uint32("devices", uint32(len(batch.Devices))).
+		Uint32("csi_packets", batch.CSI.Packets).
+		Msg("mqtt batch received")
 	if err := c.svc.Ingest(ctx, batch); err != nil {
 		log.Error().Err(err).Msg("failed to ingest data")
 		return false, err
@@ -80,8 +95,8 @@ func (c *Consumer) Start(ctx context.Context) error {
 	cliCfg := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{u},
 		KeepAlive:                     20,
-		CleanStartOnInitialConnection: false,
-		SessionExpiryInterval:         60,
+		CleanStartOnInitialConnection: true,
+		SessionExpiryInterval:         0,
 		OnConnectionUp:                c.onConnection,
 		OnConnectError:                c.onConnectionError,
 		ClientConfig: paho.ClientConfig{

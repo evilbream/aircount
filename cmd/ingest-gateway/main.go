@@ -46,7 +46,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to ensure Kafka topics")
 	}
 
-	enc, err := kafka.NewEncoder(ctx, appCfg.Kafka.SchemaRegistryURL)
+	enc, err := kafka.NewEncoder(ctx, appCfg.Kafka.SchemaRegistryURL, kafka.TopicRawDetections, kafka.TopicRawCSI)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create Kafka encoder")
 	}
@@ -57,7 +57,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", appCfg.HTTPPort),
-		Handler:           httpapi.NewRouter(ingestService),
+		Handler:           httpapi.NewIngestRouter(ingestService),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		//WriteTimeout:      10 * time.Second,

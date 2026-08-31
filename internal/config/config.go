@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"poltergeist/internal/system"
@@ -55,7 +56,8 @@ func LoadMQTT() MQTT {
 		log.Info().Msgf("failed to get hostname: %v; using %s as client ID suffix", err, h)
 	}
 
-	clientID += "-" + h
+	// Ensure uniqueness across multiple local processes on the same host.
+	clientID += "-" + h + "-" + strconv.Itoa(os.Getpid())
 
 	return MQTT{
 		Broker:   system.EnvDefault("MQTT_BROKER", "mqtt://localhost:1883"),

@@ -1,5 +1,3 @@
-# Infra for AirCount. For now just the MQTT broker the ESP32 sensors
-# publish to; Kafka + the rest get added in later stages of the plan.
 services:
   mosquitto:
     image: eclipse-mosquitto:2

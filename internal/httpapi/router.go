@@ -12,13 +12,24 @@ import (
 
 const requestIDHeader = "X-Request-ID"
 
-func NewRouter(is ingestService) http.Handler {
+func NewIngestRouter(is ingestService) http.Handler {
 	mux := http.NewServeMux()
 
 	h := NewIngestHandler(is)
 
 	mux.HandleFunc("GET /healtz", h.healthCheck)
 	mux.HandleFunc("POST /ingest", h.ingest)
+	return withMiddleware(mux)
+
+}
+
+func NewPresenceRouter(ps presenceService) http.Handler {
+	mux := http.NewServeMux()
+
+	h := NewPresenceHandler(ps)
+
+	mux.HandleFunc("GET /healtz", healthCheck)
+	mux.HandleFunc("POST /listLastPresence", h.listLastPresence)
 	return withMiddleware(mux)
 
 }

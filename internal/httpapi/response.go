@@ -14,6 +14,11 @@ type responseError struct {
 	Error   error  `json:"error,omitempty"`
 }
 
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	writeJSON(r.Context(), w, http.StatusOK, map[string]string{"status": "ok"})
+
+}
+
 func writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
 	var buf []byte
 	if body != nil {

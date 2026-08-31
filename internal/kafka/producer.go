@@ -43,3 +43,16 @@ func (p *Producer) PublishCSI(ctx context.Context, csi domain.CSIWindow) error {
 	}
 	return p.client.ProduceSync(ctx, record).FirstErr()
 }
+
+func (p *Producer) PublishPresence(ctx context.Context, presence domain.PresenceRF) error {
+	value, err := p.enc.EncodePresenceRF(&presence)
+	if err != nil {
+		return err
+	}
+	record := &kgo.Record{
+		Topic: string(TopicPresenceRF),
+		Key:   []byte(presence.SensorID),
+		Value: value,
+	}
+	return p.client.ProduceSync(ctx, record).FirstErr()
+}
