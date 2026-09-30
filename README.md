@@ -23,3 +23,5 @@ Device-free people counting over Wi-Fi: ESP32 sensors stream CSI data to a Go pi
 
 Go · Apache Kafka (franz-go) · Protobuf + Schema Registry · MQTT (Mosquitto) · ESP-IDF · Docker Compose
 
+## What's working 
+front + ingest-gateway + api-service = live chart

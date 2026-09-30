@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"runtime/debug"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -88,7 +88,7 @@ func requestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(requestIDHeader)
 		if id == "" {
-			id = uuid.NewString()
+			id = uuid.New().String()
 		}
 		w.Header().Set(requestIDHeader, id)
 		reqLogger := log.With().Str("request_id", id).Logger()

@@ -1,8 +1,10 @@
+
+
 services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: aircount-mosquitto
-    restart: unless-stopped
+    restart: no
     ports:
       - "1883:1883"   # MQTT
     volumes:
@@ -13,7 +15,7 @@ services:
   mqtt-explorer:
     image: smeagolworms4/mqtt-explorer:latest
     container_name: aircount-mqtt-explorer
-    restart: unless-stopped
+    restart: no
     depends_on:
       - mosquitto
     ports:
@@ -24,7 +26,7 @@ services:
   kafka:
     image: apache/kafka:latest
     container_name: aircount-kafka
-    restart: unless-stopped
+    restart: no
 
     ports:
       - "9092:9092"
@@ -46,7 +48,7 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: aircount-kafka-ui
-    restart: unless-stopped
+    restart: no
     depends_on:
       - kafka
       - schema-registry
@@ -60,7 +62,7 @@ services:
   schema-registry:
     image: confluentinc/cp-schema-registry:latest
     container_name: aircount-schema-registry
-    restart: unless-stopped
+    restart: no # change to unless-stopped in prod
     depends_on:
       - kafka
     ports:

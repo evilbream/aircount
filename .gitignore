@@ -8,3 +8,6 @@ README2.MD
 /ingest-gateway
 __debug_bin*
 terraform/
+csi-processor
+ui/node_modules/
+ui/dist/

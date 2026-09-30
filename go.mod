@@ -1,10 +1,10 @@
 module poltergeist
 
-go 1.26.4
+go 1.27
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/eclipse/paho.golang v0.23.0
-	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.35.1
 	github.com/twmb/franz-go v1.21.5
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
