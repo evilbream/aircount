@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aircount — sensor activity</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>👻</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="ghost">👻</span>
+    <span class="name">Aircount</span>
+    <span id="mode-badge" class="badge" hidden></span>
+  </div>
+
+  <div class="status">
+    <span id="conn-dot" class="dot connecting"></span>
+    <span id="conn" class="conn-text">connecting…</span>
+    <span id="collecting" class="chip"></span>
+  </div>
+</header>
+
+<section class="controls">
+  <div id="ranges" class="range-group" role="group" aria-label="Time window"></div>
+  <span id="window-hint" class="hint"></span>
+  <div class="spacer"></div>
+  <button id="live-pill" type="button" class="live-pill" hidden title="Back to the live tail">⟲ Live</button>
+  <button id="btn-shape" type="button" class="toggle" title="A line, or bars whose height is motion_score">line</button>
+  <button id="btn-journal" type="button" class="toggle" title="Log of the frames that arrived, rejected ones included">journal</button>
+  <button id="btn-log" type="button" class="toggle" title="Logarithmic Y axis: shows the 0.05 background and the 19.7 peak at the same time">log</button>
+</section>
+
+<main class="plot-wrap">
+  <div id="chart" class="chart"></div>
+  <div id="legend" class="legend"></div>
+  <div class="ribbons-label" title="Stretches where motion_score rose above the 0.06 threshold (the same one csi-processor uses). Computed here: the presence.rf stream does not arrive on this socket.">above threshold</div>
+  <div id="ribbons" class="ribbons"></div>
+</main>
+
+<section id="journal" class="journal" hidden>
+  <div class="journal-bar">
+    <span id="journal-stats" class="journal-stats">received 0 · rejected 0 · 0.0/s</span>
+    <span class="spacer"></span>
+    <button id="journal-pause" type="button" class="toggle small" title="Freeze the rows; the counters keep running">pause</button>
+    <button id="journal-clear" type="button" class="toggle small">clear</button>
+  </div>
+  <div id="journal-rows" class="journal-rows"></div>
+</section>
+
+<footer class="legend-note">
+  The vertical axis is <b>motion_score</b>, the variance of CSI amplitude over a
+  window. Within a bucket the <b>max</b> is taken, so a spike is not smeared out by
+  averaging. In bar mode the height is measured from zero and every sensor gets its
+  own slot inside the bucket; in line mode the dots mark the real samples.
+</footer>
+
+<script src="/config.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
