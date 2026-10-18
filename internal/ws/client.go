@@ -22,20 +22,16 @@ type Client struct {
 type Protocol interface {
 	Handle(ctx context.Context, s Session, message []byte) error
 	OnConnect(ctx context.Context, s Session) error
+	OnDisconnect(ctx context.Context, s Session) error
 }
 
 type Session interface {
 	ID() string
 	Send(ctx context.Context, message []byte) error
-	GetClient() *Client
 }
 
 func (c *Client) ID() string {
 	return c.id
-}
-
-func (c *Client) GetClient() *Client {
-	return c
 }
 
 func (c *Client) IsSubscribed() bool {

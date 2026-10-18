@@ -26,8 +26,9 @@ type Service struct {
 }
 
 type Hub interface {
-	Subscribe(cl *ws.Client, channels ...string) []string
-	Unsubscribe(cl *ws.Client, channels ...string) []string
+	Subscribe(s ws.Session, channels ...string) []string
+	Unsubscribe(s ws.Session, channels ...string) []string
+	RemoveClient(s ws.Session)
 }
 
 func NewService(hub Hub) *Service {
@@ -67,7 +68,7 @@ func (ser *Service) Handle(ctx context.Context, s ws.Session, message []byte) er
 
 func (ser *Service) OnSubscribe(ctx context.Context, s ws.Session, msg uiwire.Subscribe) error {
 
-	channels := ser.hub.Subscribe(s.GetClient(), msg.Channels...)
+	channels := ser.hub.Subscribe(s, msg.Channels...)
 	log.Info().Str("session_id", s.ID()).Any("channels", channels).Msg("subscribed to channel")
 
 	ack := uiwire.NewAck(msg.ID, uiwire.OpSubscribe, channels)
@@ -84,7 +85,7 @@ func (ser *Service) OnSubscribe(ctx context.Context, s ws.Session, msg uiwire.Su
 }
 
 func (ser *Service) OnUnsubscribe(ctx context.Context, s ws.Session, msg uiwire.Unsubscribe) error {
-	channels := ser.hub.Unsubscribe(s.GetClient(), msg.Channels...)
+	channels := ser.hub.Unsubscribe(s, msg.Channels...)
 	log.Info().Str("session_id", s.ID()).Any("remains", channels).Msg("unsubscribed from channels, remaining")
 
 	ack := uiwire.NewAck(msg.ID, uiwire.OpUnsubscribe, channels)
@@ -141,5 +142,11 @@ func (ser *Service) OnConnect(ctx context.Context, s ws.Session) error {
 		log.Error().Err(err).Str("session_id", s.ID()).Msg("failed to send hello message")
 		return err
 	}
+	return nil
+}
+
+func (ser *Service) OnDisconnect(ctx context.Context, s ws.Session) error {
+	ser.hub.RemoveClient(s)
+	log.Info().Str("session_id", s.ID()).Msg("session disconnected")
 	return nil
 }

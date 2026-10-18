@@ -102,12 +102,13 @@ type Event struct {
 	Payload any     `json:"payload"`
 }
 
-func NewEvent(channel string, seq int64, payload any) Event {
+// at is when the event was observed, not when it is sent: the chart is plotted by ts.
+func NewEvent(channel string, seq int64, at time.Time, payload any) Event {
 	return Event{
 		Type:    TypeEvent,
 		Channel: channel,
 		Seq:     seq,
-		TS:      time.Now().UnixMilli(),
+		TS:      at.UnixMilli(),
 		Payload: payload,
 	}
 }

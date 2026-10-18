@@ -2,19 +2,23 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"poltergeist/internal/httpapi"
+	"poltergeist/internal/ingest"
+	"poltergeist/internal/mqtt"
 	"poltergeist/internal/platform"
 	simplews "poltergeist/internal/simple-ws"
 	"poltergeist/internal/system"
 	"poltergeist/internal/ws"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 )
 
 func Healz(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +34,13 @@ func main() {
 		}
 	}
 	platform.SetupLogging()
+
+	appCfg, err := simplews.Load()
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to load app config")
+	}
+
+	ctx := context.Background()
 
 	l, err := net.Listen("tcp", ":8088")
 	if err != nil {
@@ -50,15 +61,32 @@ func main() {
 		WriteTimeout: 50 * time.Second,
 	}
 
-	go func() {
-		for t := range time.Tick(5 * time.Second) {
-			msg, _ := json.Marshal(map[string]any{"type": "event", "channel": "channel_name", "ts": t.UnixMilli()})
-			hub.Publish(context.Background(), "channel_name", msg)
-		}
-	}()
+	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal().Err(err).Msg("failed to serve websocket server")
+	ingestService := ingest.NewService(hub, nil)
+	mqttConsumer := mqtt.NewConsumer(appCfg.MQTT, ingestService)
+
+	g, ctx := errgroup.WithContext(sigCtx)
+
+	g.Go(func() error {
+		if err := s.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal().Err(err).Msg("failed to serve websocket server")
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := mqttConsumer.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to start MQTT consumer")
+			return err
+		}
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		log.Fatal().Err(err).Msg("application terminated with error")
 	}
 
 }

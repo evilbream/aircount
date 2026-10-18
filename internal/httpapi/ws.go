@@ -6,6 +6,7 @@ import (
 	"poltergeist/internal/ws"
 
 	"github.com/coder/websocket"
+	"github.com/rs/zerolog/log"
 )
 
 type WSServer struct {
@@ -42,8 +43,11 @@ func (s WSServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		client.Close()
 		return
 	}
-
+	defer func() {
+		if err := s.protocol.OnDisconnect(ctx, client); err != nil {
+			log.Error().Err(err).Str("session_id", client.ID()).Msg("failed to handle disconnect")
+		}
+	}()
 	client.ReadLoop(ctx, s.protocol)
-	c.Close(websocket.StatusCode(500), "internal server error")
 
 }
