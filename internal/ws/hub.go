@@ -2,10 +2,12 @@ package ws
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -15,45 +17,69 @@ const (
 )
 
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[*Client]struct{}
+	mu       sync.RWMutex
+	byChan   map[string]map[*Client]struct{}
+	byClient map[*Client]map[string]struct{}
+}
+
+func (h *Hub) Subscribe(c *Client, channels ...string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.byClient[c] == nil {
+		h.byClient[c] = make(map[string]struct{})
+	}
+	for _, ch := range channels {
+		if h.byChan[ch] == nil {
+			h.byChan[ch] = make(map[*Client]struct{})
+		}
+		h.byChan[ch][c] = struct{}{}
+		h.byClient[c][ch] = struct{}{}
+	}
+	return slices.Sorted(maps.Keys(h.byClient[c]))
+}
+
+func (h *Hub) Unsubscribe(c *Client, channels ...string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.byClient[c] == nil {
+		return nil
+	}
+	for _, ch := range channels {
+		delete(h.byChan[ch], c)
+		delete(h.byClient[c], ch)
+	}
+	return slices.Sorted(maps.Keys(h.byClient[c]))
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients: make(map[*Client]struct{}),
+		byChan:   make(map[string]map[*Client]struct{}),
+		byClient: make(map[*Client]map[string]struct{}),
 	}
 }
 
-func (h *Hub) Register(ctx context.Context, c *websocket.Conn) *Client {
+func (h *Hub) RemoveClient(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	client := NewClient(c)
-	go client.pingLoop(ctx)
-	h.clients[client] = struct{}{}
-	return client
-}
-
-func (h *Hub) Unregister(c *Client) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	delete(h.clients, c)
-}
-
-func (h *Hub) Broadcast(ctx context.Context, message []byte) {
-	h.mu.Lock()
-	clients := make([]*Client, 0, len(h.clients))
-	for c := range h.clients {
-		clients = append(clients, c)
+	if h.byClient[c] == nil {
+		return
 	}
-	h.mu.Unlock()
-	for _, c := range clients {
-		if err := c.write(ctx, message); err != nil {
-			c.close()
-			h.mu.Lock()
-			delete(h.clients, c)
-			h.mu.Unlock()
+	for ch := range h.byClient[c] {
+		delete(h.byChan[ch], c)
+	}
+	delete(h.byClient, c)
+}
+
+func (h *Hub) Publish(ctx context.Context, channel string, message []byte) {
+	h.mu.RLock()
+	subs := make([]*Client, 0, len(h.byChan[channel]))
+	for c := range h.byChan[channel] {
+		subs = append(subs, c)
+	}
+	h.mu.RUnlock()
+	for _, c := range subs {
+		if err := c.Send(ctx, message); err != nil {
+			log.Error().Err(err).Str("session_id", c.ID()).Str("channel", channel).Msg("failed to send message to subscriber")
 		}
 	}
-
 }

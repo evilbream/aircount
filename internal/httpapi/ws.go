@@ -2,25 +2,26 @@ package httpapi
 
 import (
 	"net/http"
+	"poltergeist/internal/uiwire"
 	"poltergeist/internal/ws"
 
 	"github.com/coder/websocket"
 )
 
 type WSServer struct {
-	hub *ws.Hub
+	protocol ws.Protocol
 }
 
-func NewWSHandler(hub *ws.Hub) WSServer {
+func NewWsServer(protocol ws.Protocol) WSServer {
 	return WSServer{
-		hub: hub,
+		protocol: protocol,
 	}
 }
 
 func (s WSServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
-		Subprotocols:       []string{"aircount.v1"},
+		Subprotocols:       []string{string(uiwire.WsAirCountV1)},
 	})
 	if err != nil {
 		http.Error(w, "failed to accept websocket connection", http.StatusInternalServerError)
@@ -28,16 +29,21 @@ func (s WSServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	switch c.Subprotocol() {
-	case "aircount.v1":
-		client := s.hub.Register(ctx, c)
-		defer s.hub.Unregister(client)
-	default:
+	if c.Subprotocol() != string(uiwire.WsAirCountV1) {
 		c.Close(websocket.StatusPolicyViolation, "client must speak aircount.v1")
 		return
 	}
 
-	<-ctx.Done()
+	// тут дыра по логике, елси клиент поделючился и не стал подписываться он висит и пингуется странно
+	client := ws.NewClient(ctx, c)
+
+	//send hello message on connection
+	if err := s.protocol.OnConnect(ctx, client); err != nil {
+		client.Close()
+		return
+	}
+
+	client.ReadLoop(ctx, s.protocol)
 	c.Close(websocket.StatusCode(500), "internal server error")
 
 }

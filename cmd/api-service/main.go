@@ -56,7 +56,7 @@ func main() {
 	defer l.Close()
 
 	hub := ws.NewHub()
-	wsHandler := httpapi.NewWSHandler(hub)
+	wsHandler := httpapi.NewWsServer(nil)
 	mux := http.NewServeMux()
 	mux.Handle("GET /ws", wsHandler)
 	s := &http.Server{
@@ -72,7 +72,7 @@ func main() {
 			log.Error().Err(err).Msg("failed to marshal CSI window")
 			return err
 		}
-		hub.Broadcast(ctx, data)
+		hub.Publish(ctx, "dsf", data)
 		return nil
 	})
 

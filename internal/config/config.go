@@ -11,6 +11,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type Config interface {
+	Load() (Config, error)
+}
+
 type Kafka struct {
 	Brokers           []string // KAFKA_BROKERS, comma-separated
 	GroupID           string   // KAFKA_GROUP_ID; consumers only (empty for pure producers)

@@ -11,3 +11,4 @@ terraform/
 csi-processor
 ui/node_modules/
 ui/dist/
+cmd/test-client
