@@ -98,3 +98,40 @@ func (p Postgres) Validate() error {
 	}
 	return nil
 }
+
+type ClickHouse struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	Database string
+}
+
+func LoadClickHouse() ClickHouse {
+	return ClickHouse{
+		Host:     system.EnvDefault("CLICKHOUSE_HOST", "localhost"),
+		Port:     system.EnvDefaultInt("CLICKHOUSE_PORT", 9000),
+		User:     system.EnvDefault("CLICKHOUSE_USER", "aircount"),
+		Password: system.EnvDefault("CLICKHOUSE_PASSWORD", "aircount"),
+		Database: system.EnvDefault("CLICKHOUSE_DATABASE", "maindb"),
+	}
+}
+
+func (c ClickHouse) Validate() error {
+	if strings.TrimSpace(c.Host) == "" {
+		return fmt.Errorf("clickhouse: host is empty (set CLICKHOUSE_HOST)")
+	}
+	if c.Port <= 0 {
+		return fmt.Errorf("clickhouse: port is invalid (set CLICKHOUSE_PORT)")
+	}
+	if strings.TrimSpace(c.User) == "" {
+		return fmt.Errorf("clickhouse: user is empty (set CLICKHOUSE_USER)")
+	}
+	if strings.TrimSpace(c.Password) == "" {
+		return fmt.Errorf("clickhouse: password is empty (set CLICKHOUSE_PASSWORD)")
+	}
+	if strings.TrimSpace(c.Database) == "" {
+		return fmt.Errorf("clickhouse: database is empty (set CLICKHOUSE_DATABASE)")
+	}
+	return nil
+}

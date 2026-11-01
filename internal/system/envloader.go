@@ -117,6 +117,13 @@ func EnvDefault(key, def string) string {
 	return def
 }
 
+func EnvDefaultInt(key string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(key)); err == nil && v > 0 {
+		return v
+	}
+	return def
+}
+
 func EnvList(key string, def []string) []string {
 	if v := os.Getenv(key); v != "" {
 		return strings.Split(v, ",")

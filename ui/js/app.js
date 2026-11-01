@@ -1,7 +1,7 @@
 // Entry point: wires the socket, the raw store and the chart to the controls.
 //
 // The tab subscribes to one csi.<sensor_id> channel per sensor it is told to
-// show (?sensors=, else GET /list), and the server sends one event per CSI
+// show (?sensors=, else GET /api/list), and the server sends one event per CSI
 // window on each:
 //
 //   {"type":"event","channel":"csi.living-room","seq":42,"ts":1756713600000,
@@ -38,10 +38,10 @@ const initialBars = params.get('shape') === 'bars';
 // single tab, config.js for a standalone deploy, same origin otherwise.
 const wsURL = params.get('ws')
   || globalThis.AIRCOUNT_CONFIG?.wsURL
-  || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+  || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws`;
 
 // The hub has no wildcards and routes by exact channel name, so the tab has to
-// know the sensors. GET /list is the source; ?sensors=living-room,bedroom pins
+// know the sensors. GET /api/list is the source; ?sensors=living-room,bedroom pins
 // them for one tab, and the mock has no API to ask.
 const CSI_PREFIX = 'csi.';
 const pinnedSensors = parseSensors(params.get('sensors')) ?? (useMock ? MOCK_SENSORS : null);
@@ -363,9 +363,10 @@ scheduleRender();
 // distinct from "frozen".
 setInterval(() => { if (state.following) scheduleRender(); }, 5000);
 
-// /list sits next to /ws, so the one endpoint setting covers both.
+// list sits next to ws under the same prefix (/api behind nginx, none on a bare
+// API host), so the one endpoint setting covers both.
 async function fetchSensors() {
-  const url = new URL('/list', wsURL.replace(/^ws/, 'http'));
+  const url = new URL('list', wsURL.replace(/^ws/, 'http'));
   const res = await fetch(url, { signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const list = await res.json();

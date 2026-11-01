@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"poltergeist/internal/clickhouse"
 	"poltergeist/internal/httpapi"
 	"poltergeist/internal/ingest"
 	"poltergeist/internal/mqtt"
@@ -49,6 +50,14 @@ func main() {
 	log.Info().Str("addr", l.Addr().String()).Msg("listening on port 8088")
 	defer l.Close()
 
+	conn, err := clickhouse.Open(ctx, appCfg.ClickHouse)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to ClickHouse")
+	}
+	log.Info().Msg("connected to ClickHouse")
+
+	writer := clickhouse.NewWriter(conn)
+
 	hub := ws.NewHub()
 	service := simplews.NewService(hub)
 	handler := httpapi.NewSimpleWSRouter(service)
@@ -61,7 +70,7 @@ func main() {
 	sigCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ingestService := ingest.NewService(hub, nil)
+	ingestService := ingest.NewService(ingest.Fanout(writer, hub), nil)
 	mqttConsumer := mqtt.NewConsumer(appCfg.MQTT, ingestService)
 
 	g, ctx := errgroup.WithContext(sigCtx)
@@ -88,6 +97,14 @@ func main() {
 		defer cancel()
 		if err := s.Shutdown(shutdownCtx); err != nil {
 			log.Error().Err(err).Msg("failed to shutdown server")
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := writer.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to run ClickHouse writer")
 			return err
 		}
 		return nil

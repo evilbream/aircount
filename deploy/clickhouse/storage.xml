@@ -1,0 +1,9 @@
+<clickhouse>
+  <storage_configuration>
+    <disks>
+      <default>
+        <keep_free_space_bytes>10737418240</keep_free_space_bytes>
+      </default>
+    </disks>
+  </storage_configuration>
+</clickhouse>

@@ -3,11 +3,11 @@
 // a static host overwrites it (or generates it from env at container start)
 // instead of the bundle being rebuilt per environment.
 //
-//   wsURL: ""                            same origin as the page — /ws
+//   wsURL: ""                            same origin as the page — /api/ws
 //          "wss://api.example.com/ws"    API deployed elsewhere
 //
 // Precedence: ?ws= (one tab, for poking at another backend) > this > same origin.
-// The sensor list comes from GET /list on that same host.
+// The sensor list is fetched from `list` next to that URL (/api/list by default).
 window.AIRCOUNT_CONFIG = {
   wsURL: '',
 };

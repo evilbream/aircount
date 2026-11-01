@@ -17,8 +17,8 @@ Subprotocol `aircount.v1` (types in `internal/uiwire`). One session:
    "payload":{"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.0453}}
 ```
 
-**Sensors come from the server**: on load the tab calls `GET /list` on the same
-host as `/ws`, gets `["living-room","bedroom"]` and subscribes to one
+**Sensors come from the server**: on load the tab calls `GET /api/list`, next to
+`/api/ws`, gets `["living-room","bedroom"]` and subscribes to one
 `csi.<sensor_id>` per sensor. If that fails, the status line says so and it
 retries every 5 s. The list is read once per load, so a new sensor needs a
 reload. `?sensors=living-room,bedroom` skips the call and pins the set for one
@@ -71,12 +71,13 @@ npm run build      # -> dist/
 npm run preview    # serve dist/ on :4173, to check the real build
 ```
 
-`npm run dev` proxies `/ws` and `/list` to `http://localhost:8088`, so the page
-and the API share an origin: no `?ws=` parameter and no cross-origin handshake.
+`npm run dev` proxies `/api` to `http://localhost:8088` and strips the prefix, as
+nginx does in deploy, so the page and the API share an origin: no `?ws=`
+parameter and no cross-origin handshake.
 Point it at another backend with `VITE_API_ORIGIN=http://host:port npm run dev`.
 
 **Without a backend** — a fake socket speaking the same protocol; it accepts any
-`csi.<sensor_id>`, so `?sensors=` decides what it emits (`/list` is not called;
+`csi.<sensor_id>`, so `?sensors=` decides what it emits (`/api/list` is not called;
 without `?sensors=` it shows `MOCK_SENSORS` from `js/mock.js`):
 
 ```
@@ -101,7 +102,8 @@ window.AIRCOUNT_CONFIG = { wsURL: 'wss://api.example.com/ws' };
 ```
 
 An empty `wsURL` means "same origin as the page" — that is the mode where a
-reverse proxy puts the UI, `/ws` and `/list` behind one hostname. Precedence:
+reverse proxy puts the UI and `/api/` behind one hostname and strips the prefix
+(`deploy/nginx/default.conf`). Precedence:
 `?ws=` (one tab) > `config.js` > same origin.
 
 If the API is on another origin, `websocket.Accept` has to allow it:
@@ -125,5 +127,5 @@ along zero. The `log`/`linear` toggle is in the top right corner.
 | `js/mock.js`   | `?mock=1` — a fake socket speaking the same protocol |
 
 To serve the UI from `api-service` instead of a separate host, embed the build
-output: `//go:embed all:dist` after `npm run build`, and leave `config.js` with
-an empty `wsURL` so the page uses its own origin.
+output: `//go:embed all:dist` after `npm run build`, and set `wsURL` in
+`config.js` to that host's `/ws`, because the API has no `/api` prefix of its own.

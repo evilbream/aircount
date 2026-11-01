@@ -1,26 +1,41 @@
 
 
 services:
-  app:
+  nginx-aircount:
+    container_name: nginx-aircount
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - aircount-ws
+      - frontend
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+  aircount-ws:
     build:
       context: ..
       dockerfile: cmd/simple-ws/Dockerfile
-    container_name: aircount-app
-    restart: no
+    container_name: aircount-ws
+    restart: unless-stopped
     environment:
       PLATFORM: docker
       MQTT_BROKER: ${MQTT_BROKER:-mqtt://mosquitto:1883}
       MQTT_CLIENT_ID: simple-ws
       MQTT_TOPIC: aircount/+/batch
-      PORT: 8088
-    ports:
-      - "8088:8088"
+      PORT: ${PORT:-8088}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-maindb}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-localhost}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
 
   frontend:
     build:
       context: ../ui
       dockerfile: Dockerfile
     container_name: aircount-frontend
-    restart: no
-    ports:
-      - "5173:5173"
+    restart: unless-stopped
+    depends_on:
+      - aircount-ws
