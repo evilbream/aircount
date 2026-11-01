@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	simplews "poltergeist/internal/simple-ws"
 	"runtime/debug"
 	"time"
 	"uuid"
@@ -32,6 +33,18 @@ func NewPresenceRouter(ps presenceService) http.Handler {
 	mux.HandleFunc("POST /listLastPresence", h.listLastPresence)
 	return withMiddleware(mux)
 
+}
+
+func NewSimpleWSRouter(sws *simplews.Service) http.Handler {
+	mux := http.NewServeMux()
+
+	h := NewSimpleWS()
+
+	wsHandler := NewWsServer(sws)
+	mux.Handle("GET /ws", wsHandler)
+	mux.HandleFunc("GET /healtz", h.healthCheck)
+	mux.HandleFunc("GET /list", h.listSensors)
+	return withMiddleware(mux)
 }
 
 func withMiddleware(next http.Handler) http.Handler {

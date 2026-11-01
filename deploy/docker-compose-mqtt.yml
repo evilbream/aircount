@@ -1,0 +1,27 @@
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: aircount-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+
+  # Web UI to browse the broker as a topic tree (http://localhost:4000).
+  mqtt-explorer:
+    image: smeagolworms4/mqtt-explorer:latest
+    container_name: aircount-mqtt-explorer
+    restart: unless-stopped
+    depends_on:
+      - mosquitto
+    ports:
+      - "4000:4000"
+    volumes:
+      - mqtt_explorer_config:/mqtt-explorer/config
+
+volumes:
+  mosquitto_data:
+  mqtt_explorer_config:

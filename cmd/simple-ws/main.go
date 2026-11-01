@@ -51,12 +51,9 @@ func main() {
 
 	hub := ws.NewHub()
 	service := simplews.NewService(hub)
-	wsHandler := httpapi.NewWsServer(service)
-	mux := http.NewServeMux()
-	mux.Handle("GET /ws", wsHandler)
-	mux.HandleFunc("GET /healz", Healz)
+	handler := httpapi.NewSimpleWSRouter(service)
 	s := &http.Server{
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  50 * time.Second,
 		WriteTimeout: 50 * time.Second,
 	}
@@ -80,6 +77,17 @@ func main() {
 	g.Go(func() error {
 		if err := mqttConsumer.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("failed to start MQTT consumer")
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Shutdown(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("failed to shutdown server")
 			return err
 		}
 		return nil

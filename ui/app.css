@@ -238,6 +238,7 @@ body {
 }
 .jrow:hover { background: rgba(255, 255, 255, .03); }
 .jrow.bad { color: var(--bad); }
+.jrow.svc { color: var(--muted); }
 
 .jtime { color: var(--muted); }
 .jdot { width: 8px; height: 8px; border-radius: 50%; background: transparent; }

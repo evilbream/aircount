@@ -1,8 +1,10 @@
-// On-screen log of what actually arrived on the socket.
+// On-screen log of what actually went over the socket, both ways.
 //
 // It records rejected frames too, with the reason: a journal that only shows
 // what parsed cleanly is silent exactly when the protocol has drifted, which is
-// the one moment you need it.
+// the one moment you need it. Service messages (hello, ack, ping/pong, error)
+// are shown too, dimmed, because "subscribed to nothing" and "nothing arrives"
+// look identical on the chart.
 
 const MAX_ROWS = 300;
 const RATE_WINDOW_MS = 5000;
@@ -19,6 +21,18 @@ function fmtScore(v) {
   if (v >= 10) return v.toFixed(2);
   if (v >= 1) return v.toFixed(3);
   return v.toFixed(4);
+}
+
+// One line on a service message; the full JSON is in the row's tooltip.
+function summarize(m) {
+  if (!m || typeof m !== 'object') return '';
+  if (Array.isArray(m.channels)) return m.channels.join(', ');
+  if (Array.isArray(m.subscribed)) return m.subscribed.join(', ') || 'nothing';
+  if (m.type === 'hello') return `conn ${m.conn_id ?? '?'}`;
+  if (m.type === 'error') return m.message ?? String(m.code ?? '');
+  if (m.type === 'dropped') return `${m.channel}: ${m.count} lost`;
+  if (m.type === 'bye') return m.reason ?? '';
+  return m.id != null ? `id ${m.id}` : '';
 }
 
 export class Journal {
@@ -65,18 +79,21 @@ export class Journal {
   /**
    * @param {object} frame  the parsed message, whatever shape it had
    * @param {string|null} reason  null when accepted, otherwise why it was dropped
+   * @param {'in'|'out'} dir  received from the server, or sent by this tab
    */
-  push(frame, reason = null) {
+  push(frame, reason = null, dir = 'in') {
     const at = Date.now();
-    this.received++;
-    if (reason) this.rejected++;
-    this.stamps.push(at);
+    if (dir === 'in') {
+      this.received++;
+      if (reason) this.rejected++;
+      this.stamps.push(at);
+    }
 
     // Paused freezes the rows, not the counters — you still want to see whether
     // anything is arriving at all.
     if (this.paused) return;
 
-    this.pendingRows.push({ at, frame, reason });
+    this.pendingRows.push({ at, frame, reason, dir });
     if (this.pendingRows.length > this.max) {
       this.pendingRows.splice(0, this.pendingRows.length - this.max);
     }
@@ -112,42 +129,47 @@ export class Journal {
     if (this.stick) this.rowsEl.scrollTop = this.rowsEl.scrollHeight;
   }
 
-  #buildRow({ at, frame, reason }) {
+  #buildRow({ at, frame, reason, dir }) {
+    const isEvent = frame?.type === 'event';
     const row = document.createElement('div');
-    row.className = 'jrow' + (reason ? ' bad' : '');
+    row.className = 'jrow' + (reason ? ' bad' : isEvent ? '' : ' svc');
+    // The raw message is what settles a protocol argument, so keep it to hand.
+    row.title = JSON.stringify(frame);
 
     const time = document.createElement('span');
     time.className = 'jtime';
     time.textContent = clock(at);
     row.appendChild(time);
 
-    const id = typeof frame?.sensor_id === 'string' ? frame.sensor_id : '—';
+    const payload = isEvent ? frame.payload : null;
+    const id = typeof payload?.sensor_id === 'string' ? payload.sensor_id : null;
+
     const dot = document.createElement('span');
     dot.className = 'jdot';
-    if (!reason) dot.style.background = this.palette.colorFor(id);
+    if (!reason && id) dot.style.background = this.palette.colorFor(id);
     row.appendChild(dot);
 
     const name = document.createElement('span');
     name.className = 'jname';
-    name.textContent = id;
+    name.textContent = isEvent ? (id ?? frame.channel ?? '—') : `${dir === 'out' ? '→' : '←'} ${frame?.type ?? frame?.op ?? '?'}`;
     row.appendChild(name);
 
     const score = document.createElement('span');
-    const v = frame?.motion_score;
+    const v = payload?.motion_score;
     score.className = 'jscore' + (!reason && typeof v === 'number' && v >= this.threshold ? ' hot' : '');
-    score.textContent = fmtScore(v);
+    score.textContent = isEvent ? fmtScore(v) : '';
     row.appendChild(score);
 
     const note = document.createElement('span');
     note.className = 'jnote';
     if (reason) {
       note.textContent = reason;
-      // The raw payload is what settles a protocol argument, so keep it to hand.
-      row.title = JSON.stringify(frame);
+    } else if (isEvent) {
+      // Lag between the observation stamp and arrival here.
+      const lag = Number.isFinite(frame.ts) ? at - frame.ts : null;
+      note.textContent = lag == null ? 'no ts' : `#${frame.seq} +${lag} ms`;
     } else {
-      // Lag between the gateway's stamp and arrival here.
-      const lag = Number.isFinite(frame.timestamp) ? at - frame.timestamp : null;
-      note.textContent = lag == null ? 'no timestamp' : `+${lag} ms`;
+      note.textContent = summarize(frame);
     }
     row.appendChild(note);
     return row;

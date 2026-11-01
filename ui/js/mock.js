@@ -1,16 +1,23 @@
-// Offline mode (?mock=1): stands in for the socket and emits exactly what
-// api-service emits — one flat CSI window per message, all sensors mixed on one
-// connection. Lets the UI be worked on without the backend, and afterwards
-// serves as the fixture when frontend and backend disagree.
+// Offline mode (?mock=1): stands in for the socket and speaks the same
+// aircount.v1 protocol as simple-ws — hello on connect, ack on subscribe, pong
+// on ping, and one event per subscribed csi.<sensor> channel every window. Lets
+// the UI be worked on without the backend, and afterwards serves as the fixture
+// when frontend and backend disagree.
 //
-//   ?mock=1          live only, one window per sensor every 5s
+// Any csi.<sensor_id> channel is accepted, so ?sensors= decides what it emits;
+// without it the tab subscribes to MOCK_SENSORS, there being no /list to ask.
+//
+//   ?mock=1          live only, one window per subscribed sensor every 5s
 //   ?mock=1&seed=1   plus ~2h of backdated points, to exercise 6h/24h at once
 //   ?mock=1&flaky=1  plus a dropped connection at 45s
 
 import { NATIVE_WINDOW_MS } from './series.js';
 
-const SENSORS = ['living-room', 'kitchen', 'hallway'];
 const SEED_SPAN_MS = 2 * 60 * 60_000;
+const HEARTBEAT_MS = 25_000;
+const CSI_PREFIX = 'csi.';
+
+export const MOCK_SENSORS = ['living-room', 'bedroom'];
 
 function hash01(str) {
   let h = 0x811c9dc5;
@@ -48,40 +55,81 @@ class MockSocket {
     this.timers = [];
     this.flaky = flaky;
     this.seed = seed;
+    this.channels = new Set();
+    this.seqs = new Map(); // channel -> last seq, per channel like the hub
+    this.connId = `mock-${Math.random().toString(16).slice(2, 10)}`;
     setTimeout(() => this.#open(), 150);
   }
 
-  #emit(sensorID, tMs, score) {
+  #reply(msg) {
     if (this.readyState !== 1 || !this.onmessage) return;
-    this.onmessage({
-      data: JSON.stringify({ sensor_id: sensorID, timestamp: tMs, motion_score: score }),
+    this.onmessage({ data: JSON.stringify(msg) });
+  }
+
+  #emit(channel, tMs, score) {
+    const seq = (this.seqs.get(channel) ?? 0) + 1;
+    this.seqs.set(channel, seq);
+    const sensorId = channel.slice(CSI_PREFIX.length);
+    this.#reply({
+      type: 'event', channel, seq, ts: tMs,
+      payload: { sensor_id: sensorId, timestamp: tMs, motion_score: score },
     });
   }
 
   #open() {
     this.readyState = 1;
     this.onopen?.({});
-
-    if (this.seed) {
-      const now = Date.now();
-      for (let t = now - SEED_SPAN_MS; t <= now; t += NATIVE_WINDOW_MS) {
-        for (const id of SENSORS) {
-          const v = scoreAt(id, t);
-          if (v != null) this.#emit(id, t, v);
-        }
-      }
-    }
+    this.#reply({
+      type: 'hello', protocol: 'aircount.v1', conn_id: this.connId,
+      server_ts: Date.now(), heartbeat_ms: HEARTBEAT_MS,
+      limits: { max_channels: 10, max_msg_bytes: 1024 },
+    });
 
     this.timers.push(setInterval(() => {
       const now = Date.now();
-      for (const id of SENSORS) {
-        const v = scoreAt(id, now);
-        if (v != null) this.#emit(id, now, v);
+      for (const ch of this.channels) {
+        const v = scoreAt(ch.slice(CSI_PREFIX.length), now);
+        if (v != null) this.#emit(ch, now, v);
       }
     }, NATIVE_WINDOW_MS));
 
     // Drop once, mid-session, so the reconnect path gets exercised for real.
     if (this.flaky) this.timers.push(setTimeout(() => this.#drop(), 45_000));
+  }
+
+  #backfill(channel) {
+    const now = Date.now();
+    for (let t = now - SEED_SPAN_MS; t <= now; t += NATIVE_WINDOW_MS) {
+      const v = scoreAt(channel.slice(CSI_PREFIX.length), t);
+      if (v != null) this.#emit(channel, t, v);
+    }
+  }
+
+  #handle(msg) {
+    const sorted = () => [...this.channels].sort();
+    switch (msg.op) {
+      case 'subscribe': {
+        const bad = (msg.channels ?? []).filter((c) => !c.startsWith(CSI_PREFIX) || c === CSI_PREFIX);
+        if (bad.length) {
+          this.#reply({ type: 'error', id: msg.id, code: 400, message: `unknown channel ${JSON.stringify(bad[0])}` });
+          return;
+        }
+        const added = msg.channels.filter((c) => !this.channels.has(c));
+        for (const c of added) this.channels.add(c);
+        this.#reply({ type: 'ack', id: msg.id, op: 'subscribe', subscribed: sorted() });
+        if (this.seed) for (const c of added) this.#backfill(c);
+        return;
+      }
+      case 'unsubscribe':
+        for (const c of msg.channels ?? []) this.channels.delete(c);
+        this.#reply({ type: 'ack', id: msg.id, op: 'unsubscribe', subscribed: sorted() });
+        return;
+      case 'ping':
+        this.#reply({ type: 'pong', id: msg.id, server_ts: Date.now() });
+        return;
+      default:
+        this.#reply({ type: 'error', id: msg.id, code: 400, message: `unknown op ${JSON.stringify(msg.op)}` });
+    }
   }
 
   #drop() {
@@ -96,9 +144,16 @@ class MockSocket {
     this.timers = [];
   }
 
-  send() { /* the stream is one-way; nothing to say back */ }
+  send(data) {
+    if (this.readyState !== 1) return;
+    let msg;
+    try { msg = JSON.parse(data); } catch { return; }
+    // Async, like a real round trip: the reply must not land inside send().
+    setTimeout(() => this.#handle(msg), 20);
+  }
 
   close() {
+    if (this.readyState === 3) return;
     this.readyState = 3;
     this.#clear();
     this.onclose?.({ code: 1000, reason: 'client close', wasClean: true });

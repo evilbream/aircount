@@ -7,6 +7,7 @@
 //          "wss://api.example.com/ws"    API deployed elsewhere
 //
 // Precedence: ?ws= (one tab, for poking at another backend) > this > same origin.
+// The sensor list comes from GET /list on that same host.
 window.AIRCOUNT_CONFIG = {
   wsURL: '',
 };

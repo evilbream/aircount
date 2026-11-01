@@ -1,0 +1,26 @@
+
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: cmd/simple-ws/Dockerfile
+    container_name: aircount-app
+    restart: no
+    environment:
+      PLATFORM: docker
+      MQTT_BROKER: ${MQTT_BROKER:-mqtt://mosquitto:1883}
+      MQTT_CLIENT_ID: simple-ws
+      MQTT_TOPIC: aircount/+/batch
+      PORT: 8088
+    ports:
+      - "8088:8088"
+
+  frontend:
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+    container_name: aircount-frontend
+    restart: no
+    ports:
+      - "5173:5173"

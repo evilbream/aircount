@@ -7,22 +7,35 @@ static folder any host can serve, with no Go service behind it.
 
 ## Contract
 
-The server sends **one flat object per CSI window**, with no envelope and no
-type tag — exactly what `uiwire.UIWireEv` marshals into:
+Subprotocol `aircount.v1` (types in `internal/uiwire`). One session:
 
-```json
-{"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.0453}
+```
+← {"type":"hello","conn_id":"…","server_ts":…,"heartbeat_ms":25000,"limits":{…}}
+→ {"op":"subscribe","id":"1","channels":["csi.living-room","csi.bedroom"]}
+← {"type":"ack","id":"1","op":"subscribe","subscribed":["csi.bedroom","csi.living-room"]}
+← {"type":"event","channel":"csi.living-room","seq":42,"ts":1756713600000,
+   "payload":{"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.0453}}
 ```
 
-`timestamp` is unix ms (`ObservedAt`, stamped by the gateway). **All sensors
-share one connection**; the split into series by `sensor_id` is entirely
-client-side — a new `sensor_id` is picked up on the fly, and its series and
-color appear on their own.
+**Sensors come from the server**: on load the tab calls `GET /list` on the same
+host as `/ws`, gets `["living-room","bedroom"]` and subscribes to one
+`csi.<sensor_id>` per sensor. If that fails, the status line says so and it
+retries every 5 s. The list is read once per load, so a new sensor needs a
+reload. `?sensors=living-room,bedroom` skips the call and pins the set for one
+tab. The hub has no wildcards, so a sensor that is not listed is not shown.
+Subscriptions belong to the connection: every reconnect repeats them.
 
-The stream is one-way: the client sends nothing, there is no subscription and
-the socket has no handshake. A message without `sensor_id` or without a numeric
-`motion_score` is ignored rather than fatal — the server can start sending more
-without breaking an already-open tab.
+`ts` is unix ms of the observation and is what the chart plots by; `seq` grows
+per channel, so a gap means a lost event on that channel. The browser cannot see
+WebSocket ping frames, so after `heartbeat_ms` of silence the tab sends
+`{"op":"ping"}` and expects `pong`; nothing within 10 s more means a dead
+connection and a reconnect.
+
+An event without a `csi.` channel, `payload.sensor_id` or a numeric
+`payload.motion_score` is ignored rather than fatal, and unknown message types
+are skipped — the server can add more without breaking an already-open tab. The
+journal shows every message both ways, service ones dimmed, rejected ones with
+the reason.
 
 ### What follows from that
 
@@ -58,11 +71,13 @@ npm run build      # -> dist/
 npm run preview    # serve dist/ on :4173, to check the real build
 ```
 
-`npm run dev` proxies `/ws` to `http://localhost:8088`, so the page and the
-socket share an origin: no `?ws=` parameter and no cross-origin handshake.
+`npm run dev` proxies `/ws` and `/list` to `http://localhost:8088`, so the page
+and the API share an origin: no `?ws=` parameter and no cross-origin handshake.
 Point it at another backend with `VITE_API_ORIGIN=http://host:port npm run dev`.
 
-**Without a backend** — a synthetic stream in the same format:
+**Without a backend** — a fake socket speaking the same protocol; it accepts any
+`csi.<sensor_id>`, so `?sensors=` decides what it emits (`/list` is not called;
+without `?sensors=` it shows `MOCK_SENSORS` from `js/mock.js`):
 
 ```
 http://localhost:5173/?mock=1          live stream, one window per sensor every 5s
@@ -70,8 +85,8 @@ http://localhost:5173/?mock=1&seed=1   + 2 hours backdated, to check 6h/24h righ
 http://localhost:5173/?mock=1&flaky=1  + a dropped connection at the 45-second mark
 ```
 
-More parameters: `?range=6h`, `?scale=linear`, `?ws=wss://host/ws` — the view is
-shareable by link.
+More parameters: `?sensors=living-room,bedroom`, `?range=6h`, `?scale=linear`,
+`?ws=wss://host/ws` — the view is shareable by link.
 
 ### Deploying it
 
@@ -86,13 +101,14 @@ window.AIRCOUNT_CONFIG = { wsURL: 'wss://api.example.com/ws' };
 ```
 
 An empty `wsURL` means "same origin as the page" — that is the mode where a
-reverse proxy puts the UI and `/ws` behind one hostname. Precedence:
+reverse proxy puts the UI, `/ws` and `/list` behind one hostname. Precedence:
 `?ws=` (one tab) > `config.js` > same origin.
 
 If the API is on another origin, `websocket.Accept` has to allow it:
 `&websocket.AcceptOptions{OriginPatterns: []string{"ui.example.com"}}`
 (`internal/httpapi/ws.go` currently passes `InsecureSkipVerify: true`, which
-allows any).
+allows any). `/list` answers with `Access-Control-Allow-Origin: *` for the same
+reason; narrow both together.
 
 The Y axis is **logarithmic** by default: in real captures `motion_score` runs
 from 0.002 to 19.7, and on a linear axis everything normal collapses into a line
@@ -104,9 +120,9 @@ along zero. The `log`/`linear` toggle is in the top right corner.
 |---|---|
 | `js/series.js` | raw point store, bucketing, palette. Pure functions |
 | `js/chart.js`  | uPlot, follow mode, the "no data" zone, threshold line, ribbons |
-| `js/ws.js`     | connect, backoff with jitter, pause on a hidden tab |
-| `js/app.js`    | state, controls, statuses |
-| `js/mock.js`   | `?mock=1` — a fake socket in the same format |
+| `js/ws.js`     | aircount.v1 session: hello, subscribe/ack, ping/pong, backoff with jitter, pause on a hidden tab |
+| `js/app.js`    | state, controls, statuses, which sensors to subscribe to |
+| `js/mock.js`   | `?mock=1` — a fake socket speaking the same protocol |
 
 To serve the UI from `api-service` instead of a separate host, embed the build
 output: `//go:embed all:dist` after `npm run build`, and leave `config.js` with

@@ -1,16 +1,19 @@
 // Entry point: wires the socket, the raw store and the chart to the controls.
 //
-// The server pushes one flat CSI window per message and nothing else:
+// The tab subscribes to one csi.<sensor_id> channel per sensor it is told to
+// show (?sensors=, else GET /list), and the server sends one event per CSI
+// window on each:
 //
-//   {"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.045}
+//   {"type":"event","channel":"csi.living-room","seq":42,"ts":1756713600000,
+//    "payload":{"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.045}}
 //
-// All sensors share one connection; splitting into a series per sensor_id, the
-// windowing and the bucketing all happen here.
+// Splitting into a series per sensor_id, the windowing and the bucketing all
+// happen here. The handshake itself lives in ws.js.
 
 import { RawStore, Palette, RANGES, rangeById, NATIVE_WINDOW_MS, MOTION_THRESHOLD } from './series.js';
 import { Chart } from './chart.js';
 import { WSClient } from './ws.js';
-import { mockFactory } from './mock.js';
+import { mockFactory, MOCK_SENSORS } from './mock.js';
 import { Journal } from './journal.js';
 
 // No point for 3 windows running means the sensor or the gateway is down. That
@@ -18,6 +21,8 @@ import { Journal } from './journal.js';
 // conflates the two is a dashboard nobody trusts.
 const STALE_AFTER_MS = 3 * NATIVE_WINDOW_MS;
 const TRIM_EVERY_MS = 60_000;
+const LIST_TIMEOUT_MS = 5000;
+const LIST_RETRY_MS = 5000;
 
 const params = new URLSearchParams(location.search);
 const useMock = params.get('mock') === '1';
@@ -35,6 +40,21 @@ const wsURL = params.get('ws')
   || globalThis.AIRCOUNT_CONFIG?.wsURL
   || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 
+// The hub has no wildcards and routes by exact channel name, so the tab has to
+// know the sensors. GET /list is the source; ?sensors=living-room,bedroom pins
+// them for one tab, and the mock has no API to ask.
+const CSI_PREFIX = 'csi.';
+const pinnedSensors = parseSensors(params.get('sensors')) ?? (useMock ? MOCK_SENSORS : null);
+let channels = [];
+
+function parseSensors(v) {
+  if (v == null) return null;
+  const list = (Array.isArray(v) ? v : String(v).split(','))
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  return list.length ? [...new Set(list)] : null;
+}
+
 const $ = (id) => document.getElementById(id);
 const els = {
   chart: $('chart'), ribbons: $('ribbons'), legend: $('legend'),
@@ -49,8 +69,10 @@ const state = {
   following: true,
   log: initialLog,
   bars: initialBars,
-  wsState: 'connecting',
+  wsState: pinnedSensors ? 'connecting' : 'listing',
   retryInMs: null,
+  subscribed: [],
+  wsError: null,
   lastPointAt: null,
 };
 
@@ -126,17 +148,32 @@ function renderConn() {
   let cls = 'connecting';
   let text = 'connecting…';
 
-  if (state.wsState === 'reconnecting') {
+  if (state.wsState === 'listing') {
+    cls = state.wsError ? 'reconnecting' : 'connecting';
+    text = state.wsError ? `sensor list failed, retrying: ${state.wsError}` : 'loading sensor list…';
+  } else if (state.wsState === 'reconnecting') {
     cls = 'reconnecting';
     text = state.retryInMs == null
       ? 'reconnecting once the tab is visible again'
       : `reconnecting in ${Math.ceil(state.retryInMs / 1000)}s`;
+  } else if (state.wsState === 'handshake') {
+    text = 'connected, waiting for hello…';
+  } else if (state.wsState === 'subscribing') {
+    text = `subscribing to ${channels.length} channel(s)…`;
+  } else if (state.wsState === 'rejected') {
+    cls = 'reconnecting';
+    text = `subscribe rejected: ${state.wsError}`;
+  } else if (state.wsState === 'idle') {
+    cls = 'stale';
+    text = channels.length
+      ? 'connected, subscribed to nothing'
+      : 'the server lists no sensors — add ?sensors=living-room,bedroom to pick some';
   } else if (stale) {
     cls = 'stale';
     text = `no data for ${fmtDur(Date.now() - state.lastPointAt)} — the sensor or the gateway is silent`;
   } else if (state.wsState === 'live') {
     cls = 'live';
-    text = `live · ${store.sensors().length} sensor(s)`;
+    text = `live · ${state.subscribed.map((c) => c.slice(CSI_PREFIX.length)).join(', ')}`;
   }
 
   els.connDot.className = `dot ${cls}`;
@@ -243,27 +280,35 @@ els.live.addEventListener('click', () => {
 
 // ---------------------------------------------------------------- frames
 
-// Returns null when the frame is usable, otherwise why it is not. Kept
-// separate from onFrame so the journal can report the exact reason instead of
-// a message silently vanishing.
-function rejectReason(frame) {
-  if (frame === null || typeof frame !== 'object') return 'not an object';
-  if (typeof frame.sensor_id !== 'string' || !frame.sensor_id) return 'no sensor_id';
-  if (typeof frame.motion_score !== 'number' || !Number.isFinite(frame.motion_score)) {
+// Returns null when an event is usable, otherwise why it is not. Kept separate
+// from onEvent so the journal can report the exact reason instead of a message
+// silently vanishing.
+function rejectReason(ev) {
+  if (typeof ev.channel !== 'string' || !ev.channel.startsWith(CSI_PREFIX)) return 'not a csi channel';
+  const p = ev.payload;
+  if (p === null || typeof p !== 'object') return 'no payload';
+  if (typeof p.sensor_id !== 'string' || !p.sensor_id) return 'no sensor_id';
+  if (typeof p.motion_score !== 'number' || !Number.isFinite(p.motion_score)) {
     return 'no motion_score';
   }
   return null;
 }
 
-function onFrame(frame) {
-  // One shape only. Anything else is logged and ignored rather than fatal, so a
-  // server that starts sending richer messages cannot break this page.
-  const reason = rejectReason(frame);
-  journal.push(frame, reason);
-  if (reason) return;
+// Every message both ways goes to the journal; events are checked first so a
+// malformed one shows up there with its reason instead of as a plain row.
+function onMessage(msg, dir, reason = null) {
+  if (dir === 'in' && msg?.type === 'event') reason = rejectReason(msg);
+  journal.push(msg, reason, dir);
+}
 
-  const t = Number.isFinite(frame.timestamp) ? frame.timestamp : Date.now();
-  store.add(frame.sensor_id, t, frame.motion_score);
+function onEvent(ev) {
+  // Bad events are already in the journal with the reason; just skip them, so
+  // a server that starts sending richer messages cannot break this page.
+  if (rejectReason(ev)) return;
+
+  // ts on the envelope is the observation time and is what the chart plots by.
+  const t = Number.isFinite(ev.ts) ? ev.ts : Date.now();
+  store.add(ev.payload.sensor_id, t, ev.payload.motion_score);
   state.lastPointAt = Date.now();
   scheduleRender();
 }
@@ -273,10 +318,13 @@ function onFrame(frame) {
 const ws = new WSClient({
   url: wsURL,
   factory: useMock ? mockFactory({ flaky, seed }) : undefined,
-  onFrame,
-  onStatus: ({ state: s, retryInMs }) => {
+  onEvent,
+  onMessage,
+  onStatus: ({ state: s, retryInMs, subscribed, error }) => {
     state.wsState = s;
     state.retryInMs = retryInMs ?? null;
+    state.subscribed = subscribed ?? [];
+    state.wsError = error ?? null;
     renderConn();
   },
 });
@@ -315,4 +363,36 @@ scheduleRender();
 // distinct from "frozen".
 setInterval(() => { if (state.following) scheduleRender(); }, 5000);
 
-ws.start();
+// /list sits next to /ws, so the one endpoint setting covers both.
+async function fetchSensors() {
+  const url = new URL('/list', wsURL.replace(/^ws/, 'http'));
+  const res = await fetch(url, { signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const list = await res.json();
+  if (!Array.isArray(list)) throw new Error('response is not a list');
+  return parseSensors(list) ?? [];
+}
+
+function startSocket(sensors) {
+  channels = sensors.map((id) => CSI_PREFIX + id);
+  ws.setChannels(channels);
+  ws.start();
+}
+
+// Nothing to subscribe to until the list arrives, so keep asking rather than
+// connect to an empty set the tab would then never leave.
+async function loadSensors() {
+  let sensors;
+  try {
+    sensors = await fetchSensors();
+  } catch (err) {
+    state.wsError = err.message;
+    renderConn();
+    setTimeout(loadSensors, LIST_RETRY_MS);
+    return;
+  }
+  startSocket(sensors);
+}
+
+if (pinnedSensors) startSocket(pinnedSensors);
+else loadSensors();
