@@ -39,6 +39,21 @@ export function bucketStart(tMs, bucketMs) {
   return Math.floor(tMs / bucketMs) * bucketMs;
 }
 
+export function fmtScore(v) {
+  if (v == null) return '—';
+  if (v >= 10) return v.toFixed(1);
+  if (v >= 1) return v.toFixed(2);
+  return v.toFixed(4);
+}
+
+export function fmtDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
 // ---------------------------------------------------------------- palette
 
 // Contrast-first on a dark ground, and no adjacent red/green pair so the chart
@@ -104,18 +119,6 @@ class View {
     this.partial = partial;
   }
 
-  /** Most recent non-null bucket value per sensor, for the live readout. */
-  lastValues() {
-    const out = new Map();
-    for (const id of this.order) {
-      const v = this.cols.get(id).v;
-      for (let i = v.length - 1; i >= 0; i--) {
-        if (v[i] != null) { out.set(id, v[i]); break; }
-      }
-    }
-    return out;
-  }
-
   /**
    * uPlot data: [xs, ...one column per sensor]. Timestamps go to seconds
    * because uPlot's time scale works in unix seconds. On a log axis zeros are
@@ -164,7 +167,6 @@ export class RawStore {
   constructor({ maxAgeMs = MAX_AGE_MS } = {}) {
     this.maxAgeMs = maxAgeMs;
     this.raw = new Map();       // sensorId -> { t: number[], v: number[] }
-    this.lastSeen = new Map();  // sensorId -> ms
     // Nothing before the page connected can ever be known: the stream is live
     // only. The UI states this rather than drawing an empty axis that reads as
     // "nobody moved".
@@ -184,7 +186,6 @@ export class RawStore {
     }
     col.t.push(tMs);
     col.v.push(score);
-    this.lastSeen.set(sensorId, tMs);
     if (this.earliestMs == null || tMs < this.earliestMs) this.earliestMs = tMs;
     if (tMs < this.collectingSinceMs) this.collectingSinceMs = tMs;
     return isNew;

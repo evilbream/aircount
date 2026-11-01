@@ -10,8 +10,9 @@
 // Splitting into a series per sensor_id, the windowing and the bucketing all
 // happen here. The handshake itself lives in ws.js.
 
-import { RawStore, Palette, RANGES, rangeById, NATIVE_WINDOW_MS, MOTION_THRESHOLD } from './series.js';
+import { RawStore, Palette, RANGES, rangeById, NATIVE_WINDOW_MS, MOTION_THRESHOLD, fmtDur } from './series.js';
 import { Chart } from './chart.js';
+import { Rooms } from './rooms.js';
 import { WSClient } from './ws.js';
 import { mockFactory, MOCK_SENSORS } from './mock.js';
 import { Journal } from './journal.js';
@@ -57,10 +58,10 @@ function parseSensors(v) {
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  chart: $('chart'), ribbons: $('ribbons'), legend: $('legend'),
-  ranges: $('ranges'), log: $('btn-log'), live: $('live-pill'),
+  chart: $('chart'), empty: $('chart-empty'), ribbons: $('ribbons'), rooms: $('rooms'),
+  ranges: $('ranges'), scale: $('scale'), live: $('live-pill'),
   conn: $('conn'), connDot: $('conn-dot'), collecting: $('collecting'), mode: $('mode-badge'),
-  hint: $('window-hint'), shape: $('btn-shape'), journal: $('journal'), journalBtn: $('btn-journal'), journalRows: $('journal-rows'),
+  hint: $('window-hint'), shape: $('shape'), journal: $('journal'), journalBtn: $('btn-journal'), journalRows: $('journal-rows'),
   journalStats: $('journal-stats'), journalPause: $('journal-pause'), journalClear: $('journal-clear'),
 };
 
@@ -71,7 +72,6 @@ const state = {
   bars: initialBars,
   wsState: pinnedSensors ? 'connecting' : 'listing',
   retryInMs: null,
-  subscribed: [],
   wsError: null,
   lastPointAt: null,
 };
@@ -81,7 +81,6 @@ const store = new RawStore();
 const chart = new Chart({
   el: els.chart,
   ribbonEl: els.ribbons,
-  legendEl: els.legend,
   palette,
   log: state.log,
   bars: initialBars,
@@ -92,6 +91,14 @@ const chart = new Chart({
   },
 });
 chart.setThreshold(MOTION_THRESHOLD);
+
+const rooms = new Rooms({
+  el: els.rooms,
+  palette,
+  threshold: MOTION_THRESHOLD,
+  staleAfterMs: STALE_AFTER_MS,
+  onToggle: (id, shown) => chart.setSensorShown(id, shown),
+});
 
 const journal = new Journal({
   rootEl: els.journal,
@@ -114,7 +121,8 @@ function scheduleRender() {
     // brand-new sensor all take the exact same path.
     const view = store.build({ rangeMs: rangeById(state.range).ms, threshold: MOTION_THRESHOLD });
     chart.render(view, { follow: state.following });
-    chart.updateSeen(store.lastSeen);
+    rooms.render();
+    els.empty.hidden = view.order.length > 0;
     renderHint(view);
     renderCollecting();
   });
@@ -125,17 +133,7 @@ function renderLivePill() { els.live.hidden = state.following; }
 // The axis is fitted to the data while the window is not yet full, so say so —
 // otherwise "5 min" over 39 seconds of data is a quietly wrong label.
 function renderHint(view) {
-  if (!view.partial || !view.xs.length) { els.hint.textContent = ''; return; }
-  const span = view.xs[view.xs.length - 1] - view.xs[0] + view.bucketMs;
-  els.hint.textContent = `showing ${fmtDur(span)} — the window is still filling`;
-}
-
-function fmtDur(ms) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
+  els.hint.textContent = view.partial && view.xs.length ? '· window still filling' : '';
 }
 
 const fmtClock = (ms) =>
@@ -173,7 +171,7 @@ function renderConn() {
     text = `no data for ${fmtDur(Date.now() - state.lastPointAt)} — the sensor or the gateway is silent`;
   } else if (state.wsState === 'live') {
     cls = 'live';
-    text = `live · ${state.subscribed.map((c) => c.slice(CSI_PREFIX.length)).join(', ')}`;
+    text = 'live';
   }
 
   els.connDot.className = `dot ${cls}`;
@@ -182,9 +180,7 @@ function renderConn() {
 
 function renderCollecting() {
   const since = store.collectingSinceMs;
-  els.collecting.textContent =
-    `collecting since ${fmtClock(since)} · ${fmtDur(Date.now() - since)} of data`;
-  els.collecting.classList.add('warn');
+  els.collecting.textContent = `${fmtDur(Date.now() - since)} of data, since ${fmtClock(since)}`;
   els.collecting.title =
     'The stream is live: the server only sends new CSI windows, there is no history '
     + 'from before the connection. Everything on screen was collected by this tab and '
@@ -193,27 +189,38 @@ function renderCollecting() {
 
 // ---------------------------------------------------------------- controls
 
+// A control that names both options, so nobody has to work out whether a button
+// labelled "linear" is the current state or what a tap would switch to.
+function markSeg(group, value) {
+  for (const b of group.querySelectorAll('button')) {
+    const on = b.dataset.value === value;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  }
+}
+
+function onSeg(group, pick) {
+  group.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (b) pick(b.dataset.value);
+  });
+}
+
 function buildRangeButtons() {
   els.ranges.innerHTML = '';
   for (const r of RANGES) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'range-btn';
-    b.dataset.range = r.id;
-    b.textContent = r.label;
+    b.dataset.value = r.id;
+    // Six full labels do not fit across a phone.
+    b.textContent = r.id;
+    b.setAttribute('aria-label', r.label);
     if (r.ms > 60 * 60_000) {
       b.title = 'fills in while the tab keeps running: the server only sends the live stream';
     }
-    b.addEventListener('click', () => selectRange(r.id));
     els.ranges.appendChild(b);
   }
-  markActiveRange();
-}
-
-function markActiveRange() {
-  for (const b of els.ranges.querySelectorAll('.range-btn')) {
-    b.classList.toggle('active', b.dataset.range === state.range);
-  }
+  markSeg(els.ranges, state.range);
 }
 
 function syncURL() {
@@ -230,15 +237,16 @@ function selectRange(id) {
   state.range = id;
   state.following = true;
   renderLivePill();
-  markActiveRange();
+  markSeg(els.ranges, id);
   syncURL();
   scheduleRender();
 }
 
-els.log.addEventListener('click', () => {
-  state.log = !state.log;
-  els.log.classList.toggle('active', state.log);
-  els.log.textContent = state.log ? 'log' : 'linear';
+onSeg(els.ranges, selectRange);
+
+onSeg(els.scale, (value) => {
+  state.log = value === 'log';
+  markSeg(els.scale, value);
   chart.setLogScale(state.log);
   syncURL();
   scheduleRender();
@@ -247,12 +255,17 @@ els.log.addEventListener('click', () => {
 function setJournal(open) {
   journal.setOpen(open);
   els.journalBtn.classList.toggle('active', open);
+  els.journalBtn.setAttribute('aria-pressed', open);
   const q = new URLSearchParams(location.search);
   if (open) q.set('journal', '1'); else q.delete('journal');
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 
-els.journalBtn.addEventListener('click', () => setJournal(els.journal.hidden));
+els.journalBtn.addEventListener('click', () => {
+  setJournal(els.journal.hidden);
+  // On a phone it opens below the fold, where the tap would seem to do nothing.
+  if (!els.journal.hidden) els.journal.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+});
 
 els.journalPause.addEventListener('click', () => {
   const paused = !journal.paused;
@@ -263,10 +276,9 @@ els.journalPause.addEventListener('click', () => {
 
 els.journalClear.addEventListener('click', () => journal.clear());
 
-els.shape.addEventListener('click', () => {
-  state.bars = !state.bars;
-  els.shape.classList.toggle('active', state.bars);
-  els.shape.textContent = state.bars ? 'bars' : 'line';
+onSeg(els.shape, (value) => {
+  state.bars = value === 'bars';
+  markSeg(els.shape, value);
   chart.setBars(state.bars);
   syncURL();
   scheduleRender();
@@ -309,6 +321,7 @@ function onEvent(ev) {
   // ts on the envelope is the observation time and is what the chart plots by.
   const t = Number.isFinite(ev.ts) ? ev.ts : Date.now();
   store.add(ev.payload.sensor_id, t, ev.payload.motion_score);
+  rooms.add(ev.payload.sensor_id, ev.payload.motion_score);
   state.lastPointAt = Date.now();
   scheduleRender();
 }
@@ -320,10 +333,9 @@ const ws = new WSClient({
   factory: useMock ? mockFactory({ flaky, seed }) : undefined,
   onEvent,
   onMessage,
-  onStatus: ({ state: s, retryInMs, subscribed, error }) => {
+  onStatus: ({ state: s, retryInMs, error }) => {
     state.wsState = s;
     state.retryInMs = retryInMs ?? null;
-    state.subscribed = subscribed ?? [];
     state.wsError = error ?? null;
     renderConn();
   },
@@ -339,10 +351,8 @@ buildRangeButtons();
 renderLivePill();
 renderConn();
 renderCollecting();
-els.log.classList.toggle('active', state.log);
-els.log.textContent = state.log ? 'log' : 'linear';
-els.shape.classList.toggle('active', state.bars);
-els.shape.textContent = state.bars ? 'bars' : 'line';
+markSeg(els.scale, state.log ? 'log' : 'linear');
+markSeg(els.shape, state.bars ? 'bars' : 'line');
 
 setJournal(initialJournal);
 journal.renderStats();
@@ -350,7 +360,7 @@ journal.renderStats();
 setInterval(() => {
   renderConn();
   renderCollecting();
-  chart.updateSeen(store.lastSeen);
+  rooms.render();
   journal.renderStats();
 }, 1000);
 setInterval(() => store.trim(), TRIM_EVERY_MS);
@@ -376,6 +386,7 @@ async function fetchSensors() {
 
 function startSocket(sensors) {
   channels = sensors.map((id) => CSI_PREFIX + id);
+  rooms.setSensors(sensors);
   ws.setChannels(channels);
   ws.start();
 }

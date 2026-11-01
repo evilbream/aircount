@@ -41,10 +41,10 @@ the reason.
 
 **There is no history.** The server only sends new windows, so the chart knows
 only what this tab has collected since it connected. The 6h/24h windows fill in
-as the tab keeps running and reset on reload. The UI says so outright: the chip
-reads "collecting since 12:18 · 40m of data", and everything to the left of the
-connection point is a hatched "no data — the API started here" zone. Without it,
-an empty 24h axis would read as "there was no motion" — a lying dashboard.
+as the tab keeps running and reset on reload. The UI says so outright: the line
+above the chart reads "40m of data, since 12:18", and everything to the left of
+the connection point is a hatched "no data — the API started here" zone. Without
+it, an empty 24h axis would read as "there was no motion" — a lying dashboard.
 
 **Switching the window is local.** The tab keeps the raw points (up to 24h) and
 rebuilds the grid for the selected window; nothing goes to the server.
@@ -59,6 +59,14 @@ bucket was built from noticeably fewer samples than it could hold.
 arrive on this socket, so the motion stretches are derived with the same `0.06`
 threshold as `domain.presenceMotionThreshold`. If you start sending the
 detector's verdict, say so and I'll switch to it.
+
+**The sensor cards use the latest raw window**, not a chart bucket, so the state
+does not depend on the selected range: Motion or Quiet against the same `0.06`,
+Silent after 15 s without data, Waiting before the first point. Tapping a card
+hides the sensor on the chart, and the axis refits to the ones that are left.
+
+**The chart works by touch**: one finger reads the values, two pinch the time
+axis, and a vertical swipe scrolls the page as usual.
 
 ## Running it
 
@@ -112,16 +120,19 @@ If the API is on another origin, `websocket.Accept` has to allow it:
 allows any). `/list` answers with `Access-Control-Allow-Origin: *` for the same
 reason; narrow both together.
 
-The Y axis is **logarithmic** by default: in real captures `motion_score` runs
-from 0.002 to 19.7, and on a linear axis everything normal collapses into a line
-along zero. The `log`/`linear` toggle is in the top right corner.
+The Y axis is linear by default. In real captures `motion_score` runs from 0.002
+to 19.7, so one spike collapses everything normal into a line along zero: switch
+to `Log` under the chart, or open the page with `?scale=log`.
 
 ## Files
 
 | | |
 |---|---|
 | `js/series.js` | raw point store, bucketing, palette. Pure functions |
-| `js/chart.js`  | uPlot, follow mode, the "no data" zone, threshold line, ribbons |
+| `js/chart.js`  | uPlot, follow mode, the "no data" zone, threshold line, ribbons, cursor readout |
+| `js/touch.js`  | finger input for the chart: scrubbing and pinch zoom |
+| `js/rooms.js`  | one card per sensor with its current state |
+| `js/journal.js`| on-screen log of the frames going over the socket |
 | `js/ws.js`     | aircount.v1 session: hello, subscribe/ack, ping/pong, backoff with jitter, pause on a hidden tab |
 | `js/app.js`    | state, controls, statuses, which sensors to subscribe to |
 | `js/mock.js`   | `?mock=1` — a fake socket speaking the same protocol |

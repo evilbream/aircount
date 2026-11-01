@@ -5,10 +5,12 @@
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 
-import { Palette, NATIVE_WINDOW_MS } from './series.js';
+import { Palette, NATIVE_WINDOW_MS, fmtScore } from './series.js';
+import { bindTouch } from './touch.js';
 
 const LOG_FLOOR = 1e-4;
 const BAR_GAP_FRAC = 0.18;
+const TIP_REACH = 2; // buckets to look around an empty one for the readout
 
 function withAlpha(hex, a) {
   const n = parseInt(hex.slice(1), 16);
@@ -52,11 +54,21 @@ function groupedBars({ groupCount, groupIdx }) {
   };
 }
 
-function fmtScore(v) {
-  if (v == null) return '—';
-  if (v >= 10) return v.toFixed(1);
-  if (v >= 1) return v.toFixed(2);
-  return v.toFixed(4);
+const fmtTime = (unixS, seconds) =>
+  new Date(unixS * 1000).toLocaleTimeString('en-GB', {
+    hour: '2-digit', minute: '2-digit', second: seconds ? '2-digit' : undefined, hour12: false,
+  });
+
+// fmtScore pads to 4 decimals for the readouts; on an axis that is just noise.
+const fmtTick = (v) => (v == null ? '' : String(+v.toPrecision(3)));
+
+/** Buckets are regularly left empty (see spanGaps), and "—" there would be a lie. */
+function nearestValue(col, i) {
+  for (let d = 0; d <= TIP_REACH; d++) {
+    if (col[i - d] != null) return col[i - d];
+    if (col[i + d] != null) return col[i + d];
+  }
+  return null;
 }
 
 /** 8x8 diagonal hatch, built once, used to shade "there is no data here". */
@@ -78,22 +90,32 @@ export class Chart {
    * @param {HTMLElement} el       chart container
    * @param {HTMLElement} ribbonEl strip under the chart for presence.rf spans
    */
-  constructor({ el, ribbonEl, legendEl, palette = new Palette(), log = true, bars = false, onFollowLost }) {
+  constructor({ el, ribbonEl, palette = new Palette(), log = true, bars = false, onFollowLost }) {
     this.el = el;
     this.ribbonEl = ribbonEl;
-    this.legendEl = legendEl;
     this.palette = palette;
     this.onFollowLost = onFollowLost;
 
     this.u = null;
     this.sensors = [];
+    this.hidden = new Set();
     this.store = null;
     this.log = log;
     this.bars = bars;
     this.threshold = null;
     this.collectingSinceMs = null;
     this.truncated = false;
-    this.lastSeen = new Map();
+
+    // Next to uPlot's root rather than inside it: that one goes on every rebuild.
+    this.tip = document.createElement('div');
+    this.tip.className = 'chart-tip';
+    this.tip.hidden = true;
+    el.appendChild(this.tip);
+
+    bindTouch(el, {
+      plot: () => this.u,
+      onZoom: (full) => this.onFollowLost?.(full),
+    });
 
     // Set while we drive the scales ourselves, so our own setData doesn't get
     // mistaken for the user panning and silently kill follow mode.
@@ -124,6 +146,12 @@ export class Chart {
     this.#rebuild(); // the path builder is baked in per series
   }
 
+  setSensorShown(id, show) {
+    if (show) this.hidden.delete(id); else this.hidden.add(id);
+    const i = this.sensors.indexOf(id);
+    if (i >= 0) this.u?.setSeries(i + 1, { show });
+  }
+
   /** Rebuilds when the sensor set changes; otherwise just pushes data. */
   render(view, { follow }) {
     const store = this.store = view;
@@ -148,18 +176,8 @@ export class Chart {
     this.applying = true;
     this.u.setData(this.store.toUPlotData({ log: this.log, logFloor: LOG_FLOOR }), follow);
     this.applying = false;
-    this.#updateLastValues();
+    this.#renderTip(this.u);
     this.#drawRibbons();
-  }
-
-  #updateLastValues() {
-    if (!this._vals || !this.store?.lastValues) return;
-    const last = this.store.lastValues();
-    for (const [id, el] of this._vals) {
-      const v = last.get(id);
-      el.textContent = v == null ? '—' : v >= 10 ? v.toFixed(1) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
-      el.classList.toggle('hot', v != null && this.threshold != null && v >= this.threshold);
-    }
   }
 
   #rebuild(follow = true) {
@@ -171,6 +189,7 @@ export class Chart {
       { label: 'time' },
       ...this.sensors.map((id, i) => ({
         label: id,
+        show: !this.hidden.has(id),
         stroke: this.palette.colorFor(id),
         fill: this.bars ? withAlpha(this.palette.colorFor(id), 0.55) : undefined,
         paths: this.bars
@@ -184,7 +203,6 @@ export class Chart {
         // because a line segment needs two. Real absences stay visible through
         // the sample markers below and the journal.
         spanGaps: true,
-        value: (_u, v) => fmtScore(v),
         points: {
           show: !this.bars,
           size: 5,
@@ -212,9 +230,11 @@ export class Chart {
     const opts = {
       width: this.el.clientWidth || 800,
       height: this.el.clientHeight || 380,
-      padding: [12, 12, 0, 0],
+      // The right side has to fit half of a centred "22:41:50" tick label.
+      padding: [12, 24, 0, 0],
       cursor: { drag: { x: true, y: false }, focus: { prox: 24 } },
-      legend: { show: true, live: true },
+      // The sensor cards and the tip do this job, and they also work on a phone.
+      legend: { show: false },
       scales: {
         x: { time: true },
         y: this.log
@@ -233,15 +253,20 @@ export class Chart {
       axes: [
         {
           stroke: '#7d8894',
+          size: 30,
+          gap: 4,
+          space: 64,
           grid: { stroke: 'rgba(255,255,255,0.06)', width: 1 },
-          ticks: { stroke: 'rgba(255,255,255,0.12)', width: 1 },
+          ticks: { stroke: 'rgba(255,255,255,0.12)', width: 1, size: 4 },
+          values: (_u, ticks, _ax, _space, incr) => ticks.map((t) => fmtTime(t, incr < 60)),
         },
         {
           stroke: '#7d8894',
-          size: 62,
+          size: 46,
+          gap: 4,
           grid: { stroke: 'rgba(255,255,255,0.06)', width: 1 },
-          ticks: { stroke: 'rgba(255,255,255,0.12)', width: 1 },
-          values: (_u, vals) => vals.map(fmtScore),
+          ticks: { stroke: 'rgba(255,255,255,0.12)', width: 1, size: 4 },
+          values: (_u, vals) => vals.map(fmtTick),
         },
       ],
       series,
@@ -249,6 +274,7 @@ export class Chart {
         // Backgrounds go in drawClear so the lines render on top of them.
         drawClear: [(u) => { this.#drawNoDataBand(u); }],
         draw: [(u) => { this.#drawThreshold(u); this.#drawRibbons(); }],
+        setCursor: [(u) => this.#renderTip(u)],
         setSelect: [(u) => {
           // Fires only on a real drag-zoom, unlike setScale which also fires on
           // resize and on our own setData.
@@ -258,17 +284,59 @@ export class Chart {
       },
     };
 
+    this.#buildTip();
     this.u?.destroy();
     this.applying = true;
     this.u = new uPlot(opts, data, this.el);
     this.applying = false;
-    // uPlot keeps its own refs to the legend nodes, so relocating the element
-    // is safe and keeps the canvas box free of it.
-    const legend = this.u.root.querySelector('.u-legend');
-    if (legend && this.legendEl) { this.legendEl.replaceChildren(legend); }
-    this.#injectSeenDots();
-    this.#updateLastValues();
     this.#drawRibbons();
+  }
+
+  #buildTip() {
+    this.tip.hidden = true;
+    this._tipTime = document.createElement('div');
+    this._tipTime.className = 'tip-time';
+    this._tipRows = this.sensors.map((id) => {
+      const row = document.createElement('div');
+      row.className = 'tip-row';
+      const swatch = document.createElement('span');
+      swatch.className = 'swatch';
+      swatch.style.background = this.palette.colorFor(id);
+      const name = document.createElement('span');
+      name.className = 'tip-name';
+      name.textContent = id;
+      const val = document.createElement('span');
+      val.className = 'tip-val';
+      row.append(swatch, name, val);
+      return { row, val };
+    });
+    this.tip.replaceChildren(this._tipTime, ...this._tipRows.map((r) => r.row));
+  }
+
+  /**
+   * The readout under the cursor. It sits at the top of the plot, on the side
+   * away from the cursor, so a finger is never on top of the numbers it asks for.
+   */
+  #renderTip(u) {
+    const i = u.cursor.idx;
+    if (i == null || !this.store) { this.tip.hidden = true; return; }
+
+    this._tipTime.textContent = fmtTime(u.data[0][i], this.store.bucketMs < 60_000);
+    this.sensors.forEach((id, n) => {
+      const { row, val } = this._tipRows[n];
+      row.hidden = this.hidden.has(id);
+      const v = nearestValue(u.data[n + 1], i);
+      val.textContent = fmtScore(v);
+      val.classList.toggle('hot', v != null && this.threshold != null && v >= this.threshold);
+    });
+
+    const dpr = u.pxRatio ?? window.devicePixelRatio ?? 1;
+    const left = u.bbox.left / dpr;
+    const width = u.bbox.width / dpr;
+    const onRight = u.cursor.left < width / 2;
+    this.tip.style.left = onRight ? 'auto' : `${left + 6}px`;
+    this.tip.style.right = onRight ? `${u.width - left - width + 6}px` : 'auto';
+    this.tip.hidden = false;
   }
 
   /**
@@ -276,7 +344,8 @@ export class Chart {
    * running". Without this band an empty 24h axis reads as a quiet house.
    */
   #drawNoDataBand(u) {
-    if (!this.truncated || this.collectingSinceMs == null) return;
+    // With no sensors at all the empty-chart message says what is going on.
+    if (!this.sensors.length || !this.truncated || this.collectingSinceMs == null) return;
     const { ctx, bbox } = u;
     const xEnd = u.valToPos(this.collectingSinceMs / 1000, 'x', true);
     const xStart = bbox.left;
@@ -321,11 +390,17 @@ export class Chart {
     ctx.lineTo(bbox.left + bbox.width, y);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(255,180,84,0.75)';
     ctx.font = `${10 * dpr}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(`threshold ${this.threshold}`, bbox.left + bbox.width - 4 * dpr, y - 2 * dpr);
+    const label = `threshold ${this.threshold}`;
+    const labelW = ctx.measureText(label).width;
+    const right = bbox.left + bbox.width - 4 * dpr;
+    // The quiet background runs right through here on a linear axis.
+    ctx.fillStyle = 'rgba(17,22,28,0.85)';
+    ctx.fillRect(right - labelW - 3 * dpr, y - 14 * dpr, labelW + 6 * dpr, 13 * dpr);
+    ctx.fillStyle = 'rgba(255,180,84,0.9)';
+    ctx.fillText(label, right, y - 2 * dpr);
     ctx.restore();
   }
 
@@ -353,7 +428,8 @@ export class Chart {
 
       const track = document.createElement('div');
       track.className = 'ribbon-track';
-      for (const span of this.store.motion.get(id) ?? []) {
+      const spans = this.hidden.has(id) ? [] : this.store.motion.get(id) ?? [];
+      for (const span of spans) {
         const a = Math.max(span.from / 1000, minX);
         const b = Math.min(span.to / 1000, maxX);
         if (!(b > a)) continue;
@@ -366,47 +442,6 @@ export class Chart {
       }
       row.appendChild(track);
       this.ribbonEl.appendChild(row);
-    }
-  }
-
-  /** Freshness dot per legend row: is this sensor still talking to us? */
-  #injectSeenDots() {
-    const root = this.legendEl ?? this.u?.root;
-    const rows = root?.querySelectorAll('.u-legend tr.u-series');
-    if (!rows) return;
-    this._dots = new Map();
-    this._vals = new Map();
-    rows.forEach((tr, i) => {
-      if (i === 0) return; // row 0 is the x (time) series
-      const id = this.sensors[i - 1];
-      if (!id) return;
-      const th = tr.querySelector('th');
-      if (!th) return;
-      const dot = document.createElement('span');
-      dot.className = 'seen-dot';
-      th.appendChild(dot);
-      this._dots.set(id, dot);
-
-      // uPlot's live legend only fills in under the cursor, so without this the
-      // current motion_score is unreadable unless you hover.
-      const val = document.createElement('span');
-      val.className = 'last-val';
-      val.title = 'latest motion_score';
-      th.appendChild(val);
-      this._vals.set(id, val);
-    });
-    this.updateSeen(this.lastSeen);
-  }
-
-  updateSeen(lastSeen) {
-    this.lastSeen = lastSeen ?? new Map();
-    if (!this._dots) return;
-    const now = Date.now();
-    for (const [id, dot] of this._dots) {
-      const t = this.lastSeen.get(id);
-      const age = t == null ? Infinity : now - t;
-      dot.className = 'seen-dot ' + (age < 15_000 ? 'fresh' : age < 120_000 ? 'warm' : 'cold');
-      dot.title = t == null ? 'no data' : `last point ${Math.round(age / 1000)}s ago`;
     }
   }
 
