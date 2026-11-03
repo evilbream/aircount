@@ -37,17 +37,42 @@ are skipped — the server can add more without breaking an already-open tab. Th
 journal shows every message both ways, service ones dimmed, rejected ones with
 the reason.
 
+**History comes from ClickHouse**, next to `/api/ws` as well:
+
+```
+GET /api/history?sensor=living-room,bedroom&from=1756710000000&to=1756713600000
+→ {"sensor_ids":["living-room","bedroom"],"from":…,"to":…,
+   "history":[{"sensor_id":"living-room","timestamp":1756710003000,"motion_score":0.0453},…]}
+```
+
+`from`/`to` are unix ms, `[from, to)`; `history` is the same `uiwire.UIWireEv` as
+an event's payload, ordered by time. The tab always passes `sensor`, because
+without it the server answers for every sensor, including ones the socket is not
+subscribed to.
+
 ### What follows from that
 
-**There is no history.** The server only sends new windows, so the chart knows
-only what this tab has collected since it connected. The 6h/24h windows fill in
-as the tab keeps running and reset on reload. The UI says so outright: the line
-above the chart reads "40m of data, since 12:18", and everything to the left of
-the connection point is a hatched "no data — the API started here" zone. Without
-it, an empty 24h axis would read as "there was no motion" — a lying dashboard.
+**History and live are one set of points.** Both carry the server's
+`observed_at` in ms (`DateTime64(3)`), so the store keys points by
+`(sensor_id, timestamp)` and the overlap between the two simply collapses.
 
-**Switching the window is local.** The tab keeps the raw points (up to 24h) and
-rebuilds the grid for the selected window; nothing goes to the server.
+**History is loaded per window.** On load the tab asks for the selected window;
+picking a wider one asks only for the part before what is already held (1h →
+24h fetches the 23h before), and a narrower one asks for nothing. The tab keeps
+the raw points (up to 24h) and rebuilds the grid for the selected window. While
+a request is in flight, or if it fails, the line above the chart says so and the
+axis is fitted to the data that is there, with the hatched "no data" zone to the
+left. A failed request is retried every 5 s.
+
+**ClickHouse lags the stream.** The writer flushes every 30 s and only once 50
+rows have piled up, so the last ~2 minutes (three sensors) to ~5 (one) are not in
+`/history` yet. A stretch the socket did not deliver, such as the tail before the
+first connect or a dropped connection, is asked for again at 35 s, 2 min and 5 min,
+after which it must have landed. Until then it is a visible hole, not a flat line.
+
+**The sensor cards** take "motion N ago" from history, so it is known at once;
+the state (Motion/Quiet/Silent) still waits for the first live point, since the
+last point in ClickHouse is minutes old by construction.
 
 **Bucketing happens on the client**, `bucketMs = max(5s, ceilTo5s(rangeMs / 360))`
 → 5m/10m/30m: 5s, 1h: 10s, 6h: 60s, 24h: 240s. The aggregate is **max**, not the
@@ -84,13 +109,14 @@ nginx does in deploy, so the page and the API share an origin: no `?ws=`
 parameter and no cross-origin handshake.
 Point it at another backend with `VITE_API_ORIGIN=http://host:port npm run dev`.
 
-**Without a backend** — a fake socket speaking the same protocol; it accepts any
-`csi.<sensor_id>`, so `?sensors=` decides what it emits (`/api/list` is not called;
-without `?sensors=` it shows `MOCK_SENSORS` from `js/mock.js`):
+**Without a backend** — a fake socket speaking the same protocol plus a fake
+`/history` built from the same generator; it accepts any `csi.<sensor_id>`, so
+`?sensors=` decides what it emits (`/api/list` is not called; without
+`?sensors=` it shows `MOCK_SENSORS` from `js/mock.js`):
 
 ```
-http://localhost:5173/?mock=1          live stream, one window per sensor every 5s
-http://localhost:5173/?mock=1&seed=1   + 2 hours backdated, to check 6h/24h right away
+http://localhost:5173/?mock=1          history for the window + one window per sensor every 5s
+http://localhost:5173/?mock=1&seed=1   + 2 hours backdated over the socket itself
 http://localhost:5173/?mock=1&flaky=1  + a dropped connection at the 45-second mark
 ```
 
@@ -117,8 +143,8 @@ reverse proxy puts the UI and `/api/` behind one hostname and strips the prefix
 If the API is on another origin, `websocket.Accept` has to allow it:
 `&websocket.AcceptOptions{OriginPatterns: []string{"ui.example.com"}}`
 (`internal/httpapi/ws.go` currently passes `InsecureSkipVerify: true`, which
-allows any). `/list` answers with `Access-Control-Allow-Origin: *` for the same
-reason; narrow both together.
+allows any). `/list` and `/history` answer with `Access-Control-Allow-Origin: *`
+for the same reason; narrow all of them together.
 
 The Y axis is linear by default. In real captures `motion_score` runs from 0.002
 to 19.7, so one spike collapses everything normal into a line along zero: switch
@@ -128,14 +154,14 @@ to `Log` under the chart, or open the page with `?scale=log`.
 
 | | |
 |---|---|
-| `js/series.js` | raw point store, bucketing, palette. Pure functions |
+| `js/series.js` | raw point store (history and live merged by timestamp), bucketing, palette. Pure functions |
 | `js/chart.js`  | uPlot, follow mode, the "no data" zone, threshold line, ribbons, cursor readout |
 | `js/touch.js`  | finger input for the chart: scrubbing and pinch zoom |
 | `js/rooms.js`  | one card per sensor with its current state |
 | `js/journal.js`| on-screen log of the frames going over the socket |
 | `js/ws.js`     | aircount.v1 session: hello, subscribe/ack, ping/pong, backoff with jitter, pause on a hidden tab |
-| `js/app.js`    | state, controls, statuses, which sensors to subscribe to |
-| `js/mock.js`   | `?mock=1` — a fake socket speaking the same protocol |
+| `js/app.js`    | state, controls, statuses, which sensors to subscribe to, `/history` loading and gap refill |
+| `js/mock.js`   | `?mock=1` — a fake socket and `/history` speaking the same protocol |
 
 To serve the UI from `api-service` instead of a separate host, embed the build
 output: `//go:embed all:dist` after `npm run build`, and set `wsURL` in

@@ -1,20 +1,31 @@
-// Entry point: wires the socket, the raw store and the chart to the controls.
+// Entry point: wires the socket, history, the raw store and the chart to the
+// controls.
 //
-// The tab subscribes to one csi.<sensor_id> channel per sensor it is told to
-// show (?sensors=, else GET /api/list), and the server sends one event per CSI
-// window on each:
+// The tab shows the sensors it is told to (?sensors=, else GET /api/list). What
+// came before it opened is read from ClickHouse through GET /api/history, for
+// the selected window only and extended as wider windows are picked:
+//
+//   GET /api/history?sensor=living-room,bedroom&from=<unix ms>&to=<unix ms>
+//   {"sensor_ids":[…],"from":…,"to":…,
+//    "history":[{"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.045},…]}
+//
+// What comes next arrives over the socket: one csi.<sensor_id> channel per
+// sensor, one event per CSI window on each:
 //
 //   {"type":"event","channel":"csi.living-room","seq":42,"ts":1756713600000,
 //    "payload":{"sensor_id":"living-room","timestamp":1756713600000,"motion_score":0.045}}
 //
-// Splitting into a series per sensor_id, the windowing and the bucketing all
-// happen here. The handshake itself lives in ws.js.
+// Both carry the server's observed_at, so the store merges them by (sensor,
+// timestamp). Splitting into a series per sensor_id, the windowing and the
+// bucketing all happen here. The handshake itself lives in ws.js.
 
-import { RawStore, Palette, RANGES, rangeById, NATIVE_WINDOW_MS, MOTION_THRESHOLD, fmtDur } from './series.js';
+import {
+  RawStore, Palette, RANGES, rangeById, bucketMsFor, NATIVE_WINDOW_MS, MOTION_THRESHOLD, fmtDur,
+} from './series.js';
 import { Chart } from './chart.js';
 import { Rooms } from './rooms.js';
 import { WSClient } from './ws.js';
-import { mockFactory, MOCK_SENSORS } from './mock.js';
+import { mockFactory, mockHistory, MOCK_SENSORS } from './mock.js';
 import { Journal } from './journal.js';
 
 // No point for 3 windows running means the sensor or the gateway is down. That
@@ -24,6 +35,17 @@ const STALE_AFTER_MS = 3 * NATIVE_WINDOW_MS;
 const TRIM_EVERY_MS = 60_000;
 const LIST_TIMEOUT_MS = 5000;
 const LIST_RETRY_MS = 5000;
+// 24h of three sensors is ~50k rows; give it time on a slow link.
+const HISTORY_TIMEOUT_MS = 20_000;
+const HISTORY_RETRY_MS = 5000;
+// The ClickHouse writer flushes every 30s, and only once 50 rows have piled up,
+// so the last minutes before any moment are not in /history yet: ~2 min with
+// three sensors, ~5 with one. A stretch the socket did not deliver is asked for
+// again on this schedule, until it must have landed.
+const SETTLE_DELAYS_MS = [35_000, 2 * 60_000, 5 * 60_000];
+// Slack around a socket outage: a window observed just before the drop may not
+// have been delivered.
+const GAP_PAD_MS = 2 * NATIVE_WINDOW_MS;
 
 const params = new URLSearchParams(location.search);
 const useMock = params.get('mock') === '1';
@@ -74,6 +96,8 @@ const state = {
   retryInMs: null,
   wsError: null,
   lastPointAt: null,
+  histBusy: false,
+  histError: null,
 };
 
 const palette = new Palette();
@@ -180,11 +204,16 @@ function renderConn() {
 
 function renderCollecting() {
   const since = store.collectingSinceMs;
-  els.collecting.textContent = `${fmtDur(Date.now() - since)} of data, since ${fmtClock(since)}`;
-  els.collecting.title =
-    'The stream is live: the server only sends new CSI windows, there is no history '
-    + 'from before the connection. Everything on screen was collected by this tab and '
-    + 'is gone on reload.';
+  let text = `${fmtDur(Date.now() - since)} of data, since ${fmtClock(since)}`;
+  if (state.histBusy) text += ' · loading history…';
+  else if (state.histError) text += ` · history failed, retrying: ${state.histError}`;
+  els.collecting.textContent = text;
+  els.collecting.title = store.coveredFromMs == null
+    ? 'History has not loaded, so everything on screen was collected by this tab from '
+      + 'the live stream and is gone on reload.'
+    : 'The selected window is loaded from ClickHouse (/history); new windows arrive over '
+      + 'the live stream. ClickHouse lags the stream by a few minutes, so anything the '
+      + 'stream missed is filled in once it lands there.';
 }
 
 // ---------------------------------------------------------------- controls
@@ -215,9 +244,6 @@ function buildRangeButtons() {
     // Six full labels do not fit across a phone.
     b.textContent = r.id;
     b.setAttribute('aria-label', r.label);
-    if (r.ms > 60 * 60_000) {
-      b.title = 'fills in while the tab keeps running: the server only sends the live stream';
-    }
     els.ranges.appendChild(b);
   }
   markSeg(els.ranges, state.range);
@@ -231,8 +257,8 @@ function syncURL() {
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 
-// Range switching is entirely local — the window is just a different view over
-// the points this tab already holds, so there is nothing to ask the server for.
+// The window is a view over the points this tab already holds; the server is
+// asked only for the part of a wider window that is not loaded yet.
 function selectRange(id) {
   state.range = id;
   state.following = true;
@@ -240,6 +266,7 @@ function selectRange(id) {
   markSeg(els.ranges, id);
   syncURL();
   scheduleRender();
+  ensureHistory();
 }
 
 onSeg(els.ranges, selectRange);
@@ -326,6 +353,129 @@ function onEvent(ev) {
   scheduleRender();
 }
 
+// ---------------------------------------------------------------- history
+
+// list and history sit next to ws under the same prefix (/api behind nginx,
+// none on a bare API host), so the one endpoint setting covers all three.
+const apiURL = (path) => new URL(path, wsURL.replace(/^ws/, 'http'));
+
+// Sensors the tab shows. /history is asked for exactly these: with no sensor
+// parameter the server answers for all of them, and a sensor the socket is not
+// subscribed to would show up as a line that never moves again.
+let historySensors = [];
+
+/** One [from, to) span, validated. Rows that do not parse are dropped, not fatal. */
+async function fetchHistory(fromMs, toMs) {
+  const from = Math.floor(fromMs);
+  const to = Math.ceil(toMs);
+  let body;
+  if (useMock) {
+    body = await mockHistory({ sensors: historySensors, from, to });
+  } else {
+    const url = apiURL('history');
+    url.searchParams.set('sensor', historySensors.join(','));
+    url.searchParams.set('from', String(from));
+    url.searchParams.set('to', String(to));
+    const res = await fetch(url, { signal: AbortSignal.timeout(HISTORY_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    body = await res.json();
+  }
+  if (!Array.isArray(body?.history)) throw new Error('response has no history list');
+
+  const wanted = new Set(historySensors);
+  const points = [];
+  let dropped = 0;
+  for (const row of body.history) {
+    const ok = row && wanted.has(row.sensor_id)
+      && Number.isFinite(row.timestamp) && Number.isFinite(row.motion_score);
+    if (ok) points.push({ sensorId: row.sensor_id, t: row.timestamp, v: row.motion_score });
+    else dropped++;
+  }
+  if (dropped) console.warn(`/history: dropped ${dropped} malformed or unasked-for row(s)`);
+  return points;
+}
+
+function applyHistory(points, coversFromMs) {
+  store.addHistory(points, coversFromMs);
+  const lastMotion = new Map();
+  for (const p of points) {
+    if (p.v < MOTION_THRESHOLD) continue;
+    const prev = lastMotion.get(p.sensorId);
+    if (prev == null || p.t > prev) lastMotion.set(p.sensorId, p.t);
+  }
+  for (const [id, t] of lastMotion) rooms.seedMotion(id, t);
+  scheduleRender();
+}
+
+// Makes history reach back over the selected window. Only the part not loaded
+// yet is asked for, so 1h → 24h fetches the 23h before it, and going back to
+// 1h fetches nothing. One request at a time; a range picked meanwhile is
+// picked up when it returns.
+async function ensureHistory() {
+  if (state.histBusy || !historySensors.length) return;
+  clearTimeout(ensureHistory.retry);
+
+  const rangeMs = rangeById(state.range).ms;
+  // One bucket of slack, so the leftmost bucket is not built from a sliver.
+  const want = Date.now() - rangeMs - bucketMsFor(rangeMs);
+  const covered = store.coveredFromMs;
+  if (covered != null && covered <= want) {
+    state.histError = null;
+    renderCollecting();
+    return;
+  }
+
+  state.histBusy = true;
+  state.histError = null;
+  renderCollecting();
+  try {
+    applyHistory(await fetchHistory(want, covered ?? Date.now()), want);
+  } catch (err) {
+    state.histError = err?.message || String(err);
+    ensureHistory.retry = setTimeout(ensureHistory, HISTORY_RETRY_MS);
+    return;
+  } finally {
+    state.histBusy = false;
+    renderCollecting();
+  }
+  ensureHistory();
+}
+
+// Asks for a stretch the socket did not deliver, on the SETTLE schedule, since
+// ClickHouse may not have it yet. Each attempt is the previous one's retry, and
+// points already held are skipped by the store, so repeats cost nothing.
+function settle(fromMs, toMs, { now = false } = {}) {
+  if (!historySensors.length) return;
+  const delays = now ? [0, ...SETTLE_DELAYS_MS] : SETTLE_DELAYS_MS;
+  for (const d of delays) {
+    setTimeout(async () => {
+      try {
+        applyHistory(await fetchHistory(fromMs, toMs), null);
+      } catch (err) {
+        console.warn('/history refetch failed', err);
+      }
+    }, d);
+  }
+}
+
+// Start of the stretch the socket has not delivered: at page load as far back
+// as ClickHouse may lag (the first history load covers up to now, but its tail
+// is not written yet), later the moment a live connection dropped.
+let gapFromMs = Date.now() - SETTLE_DELAYS_MS.at(-1);
+let everLive = false;
+
+function trackGaps(prev, next) {
+  if (next === 'live' && gapFromMs != null) {
+    // After an outage nothing of it is held, so ask straight away too; on the
+    // first connect the initial history load already did.
+    settle(gapFromMs, Date.now(), { now: everLive });
+    gapFromMs = null;
+    everLive = true;
+  } else if (prev === 'live' && next !== 'live') {
+    gapFromMs = Date.now() - GAP_PAD_MS;
+  }
+}
+
 // ---------------------------------------------------------------- boot
 
 const ws = new WSClient({
@@ -334,6 +484,7 @@ const ws = new WSClient({
   onEvent,
   onMessage,
   onStatus: ({ state: s, retryInMs, error }) => {
+    trackGaps(state.wsState, s);
     state.wsState = s;
     state.retryInMs = retryInMs ?? null;
     state.wsError = error ?? null;
@@ -373,11 +524,8 @@ scheduleRender();
 // distinct from "frozen".
 setInterval(() => { if (state.following) scheduleRender(); }, 5000);
 
-// list sits next to ws under the same prefix (/api behind nginx, none on a bare
-// API host), so the one endpoint setting covers both.
 async function fetchSensors() {
-  const url = new URL('list', wsURL.replace(/^ws/, 'http'));
-  const res = await fetch(url, { signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
+  const res = await fetch(apiURL('list'), { signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const list = await res.json();
   if (!Array.isArray(list)) throw new Error('response is not a list');
@@ -386,9 +534,11 @@ async function fetchSensors() {
 
 function startSocket(sensors) {
   channels = sensors.map((id) => CSI_PREFIX + id);
+  historySensors = sensors;
   rooms.setSensors(sensors);
   ws.setChannels(channels);
   ws.start();
+  ensureHistory();
 }
 
 // Nothing to subscribe to until the list arrives, so keep asking rather than

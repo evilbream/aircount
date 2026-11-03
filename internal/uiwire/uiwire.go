@@ -144,3 +144,23 @@ func FromCsiWindow(rawCSI domain.CSIWindow) UIWireEv {
 		MotionScore: rawCSI.MotionScore,
 	}
 }
+
+func NewHistory(q domain.HistoryQuery, ws []domain.CSIWindow) UIWireHistory {
+	ev := make([]UIWireEv, len(ws))
+	for i, w := range ws {
+		ev[i] = FromCsiWindow(w)
+	}
+	return UIWireHistory{
+		SensorIDs: q.Sensors,
+		From:      int(q.From.UnixMilli()),
+		To:        int(q.To.UnixMilli()),
+		History:   ev,
+	}
+}
+
+type UIWireHistory struct {
+	SensorIDs []string   `json:"sensor_ids"`
+	From      int        `json:"from"`
+	To        int        `json:"to"`
+	History   []UIWireEv `json:"history"`
+}

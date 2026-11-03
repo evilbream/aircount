@@ -7,7 +7,9 @@
 // "Motion" long after the room went quiet.
 //
 // Times here are arrival times rather than ev.ts, so a sensor with a drifting
-// clock cannot read as silent while its data is plainly coming in.
+// clock cannot read as silent while its data is plainly coming in. The one
+// exception is "motion N ago" seeded from history: there is no arrival time for
+// it, so it uses observed_at, which the server stamps with its own clock.
 
 import { fmtDur, fmtScore } from './series.js';
 
@@ -40,6 +42,16 @@ export class Rooms {
     if (score >= this.threshold) room.motionAt = room.seenAt;
   }
 
+  /**
+   * Last motion known from history. Only the "motion N ago" note: the state
+   * itself waits for the live stream, because ClickHouse lags it by minutes and
+   * its last point would make a busy room read as Silent until then.
+   */
+  seedMotion(id, atMs) {
+    const room = this.#room(id);
+    if (room.motionAt == null || atMs > room.motionAt) room.motionAt = atMs;
+  }
+
   render() {
     const now = Date.now();
     for (const room of this.rooms.values()) {
@@ -52,7 +64,10 @@ export class Rooms {
   }
 
   #describe({ score, seenAt, motionAt }, now) {
-    if (seenAt == null) return { cls: 'waiting', state: 'Waiting', note: 'no data yet' };
+    if (seenAt == null) {
+      const note = motionAt == null ? 'no data yet' : `motion ${fmtDur(now - motionAt)} ago`;
+      return { cls: 'waiting', state: 'Waiting', note };
+    }
     const seen = fmtDur(now - seenAt);
     if (now - seenAt > this.staleAfterMs) {
       return { cls: 'silent', state: 'Silent', note: `last data ${seen} ago` };

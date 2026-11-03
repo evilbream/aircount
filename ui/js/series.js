@@ -1,11 +1,13 @@
 // Pure data layer: raw point storage, bucketing, palette. No DOM, no network.
 //
-// The server streams raw CSI windows and nothing else — no snapshot, no
-// pre-bucketed grid — so the browser keeps every point it has seen and derives
-// the grid for whatever window is selected. Rebuilding from raw on each update
-// is a few tens of thousands of iterations at these rates, and it removes a
-// whole class of bugs: no merge seam, no "late point in a closed bucket", and
-// out-of-order arrivals simply land in the right bucket.
+// Points come from two places — GET /history (ClickHouse) and the live socket —
+// and both carry raw CSI windows, no pre-bucketed grid. The browser keeps every
+// point and derives the grid for whatever window is selected. Rebuilding from
+// raw on each update is a few tens of thousands of iterations at these rates,
+// and it removes a whole class of bugs: no merge seam between history and live,
+// no "late point in a closed bucket", and out-of-order arrivals simply land in
+// the right bucket. The two sources overlap by design, so points are keyed by
+// (sensor_id, timestamp): both carry the server's observed_at in ms.
 
 export const TARGET_POINTS = 360;
 export const NATIVE_WINDOW_MS = 5000; // one CSI window per sensor per 5s
@@ -162,33 +164,84 @@ class View {
 
 // ---------------------------------------------------------------- raw store
 
+function minOf(a, b) {
+  if (a == null) return b;
+  if (b == null) return a;
+  return Math.min(a, b);
+}
+
+/** Sorts a column's parallel t/v arrays by t, in place. */
+function sortCol(col) {
+  let sorted = true;
+  for (let i = 1; i < col.t.length && sorted; i++) sorted = col.t[i - 1] <= col.t[i];
+  if (sorted) return;
+  const idx = col.t.map((_, i) => i).sort((a, b) => col.t[a] - col.t[b]);
+  const t = idx.map((i) => col.t[i]);
+  const v = idx.map((i) => col.v[i]);
+  col.t = t;
+  col.v = v;
+}
+
 /** Every point received, per sensor, capped at the longest selectable window. */
 export class RawStore {
   constructor({ maxAgeMs = MAX_AGE_MS } = {}) {
     this.maxAgeMs = maxAgeMs;
-    this.raw = new Map();       // sensorId -> { t: number[], v: number[] }
-    // Nothing before the page connected can ever be known: the stream is live
-    // only. The UI states this rather than drawing an empty axis that reads as
-    // "nobody moved".
+    this.raw = new Map();       // sensorId -> { t: number[], v: number[], seen: Set<number> }
+    // Until history arrives, nothing before the page connected is known. The
+    // UI states this rather than drawing an empty axis that reads as "nobody
+    // moved"; a history load moves it back to where the server's answer starts.
     this.collectingSinceMs = Date.now();
+    // Start of the span GET /history has answered for, null until it has. From
+    // here on an empty stretch is a real "no data", not "not loaded".
+    this.coveredFromMs = null;
     // Tracked incrementally rather than read off col.t[0]: everything else here
     // tolerates out-of-order arrivals, and this should too.
     this.earliestMs = null;
   }
 
-  /** @returns {boolean} true when this is a sensor_id we had not seen before */
-  add(sensorId, tMs, score) {
+  #col(sensorId) {
     let col = this.raw.get(sensorId);
-    const isNew = !col;
-    if (isNew) {
-      col = { t: [], v: [] };
+    if (!col) {
+      col = { t: [], v: [], seen: new Set() };
       this.raw.set(sensorId, col);
     }
+    return col;
+  }
+
+  /** @returns {boolean} false when this exact point is already stored */
+  add(sensorId, tMs, score) {
+    const col = this.#col(sensorId);
+    if (col.seen.has(tMs)) return false;
+    col.seen.add(tMs);
     col.t.push(tMs);
     col.v.push(score);
     if (this.earliestMs == null || tMs < this.earliestMs) this.earliestMs = tMs;
     if (tMs < this.collectingSinceMs) this.collectingSinceMs = tMs;
-    return isNew;
+    return true;
+  }
+
+  /**
+   * Merges a GET /history answer. History lands behind live points that are
+   * already stored, so touched columns are re-sorted: trim() relies on order.
+   *
+   * @param {{sensorId: string, t: number, v: number}[]} points
+   * @param {number|null} coversFromMs  start of the queried span when it extends
+   *   the loaded window; null for a refetch of a recent stretch, which says
+   *   nothing about what lies before it.
+   * @returns {number} how many points were new
+   */
+  addHistory(points, coversFromMs = null) {
+    const touched = new Set();
+    let added = 0;
+    for (const p of points) {
+      if (this.add(p.sensorId, p.t, p.v)) { added++; touched.add(p.sensorId); }
+    }
+    for (const id of touched) sortCol(this.raw.get(id));
+    if (coversFromMs != null) {
+      this.coveredFromMs = this.coveredFromMs == null ? coversFromMs : Math.min(this.coveredFromMs, coversFromMs);
+      if (coversFromMs < this.collectingSinceMs) this.collectingSinceMs = coversFromMs;
+    }
+    return added;
   }
 
   sensors() { return [...this.raw.keys()].sort(); }
@@ -199,7 +252,11 @@ export class RawStore {
     for (const col of this.raw.values()) {
       let drop = 0;
       while (drop < col.t.length && col.t[drop] < cutoff) drop++;
-      if (drop > 0) { col.t.splice(0, drop); col.v.splice(0, drop); }
+      if (drop > 0) {
+        for (let i = 0; i < drop; i++) col.seen.delete(col.t[i]);
+        col.t.splice(0, drop);
+        col.v.splice(0, drop);
+      }
     }
     this.#recomputeEarliest();
   }
@@ -222,14 +279,15 @@ export class RawStore {
     const to = bucketStart(nowMs, bucketMs);
     const windowFrom = bucketStart(nowMs - rangeMs, bucketMs);
 
-    // With a live-only stream the first minutes of any window are empty by
-    // construction. Showing them anyway squeezes the data into a sliver at the
-    // right edge and makes the chart unreadable, so the axis starts at the
-    // first point we actually have. The header still says how much that is.
-    const earliest = this.earliestMs;
-    const from = earliest == null
+    // Until history covers the window (still loading, or the request failed)
+    // its first minutes are empty by construction. Showing them anyway
+    // squeezes the data into a sliver at the right edge and makes the chart
+    // unreadable, so the axis starts at the first thing we actually know about:
+    // the first point, or the start of the span the server answered for.
+    const known = minOf(this.earliestMs, this.coveredFromMs);
+    const from = known == null
       ? windowFrom
-      : Math.max(windowFrom, bucketStart(earliest, bucketMs) - bucketMs);
+      : Math.max(windowFrom, bucketStart(known, bucketMs) - bucketMs);
     const partial = from > windowFrom;
     const count = Math.round((to - from) / bucketMs) + 1;
 

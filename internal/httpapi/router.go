@@ -35,15 +35,16 @@ func NewPresenceRouter(ps presenceService) http.Handler {
 
 }
 
-func NewSimpleWSRouter(sws *simplews.Service) http.Handler {
+func NewSimpleWSRouter(sws *simplews.Service, r csiHistoryReader) http.Handler {
 	mux := http.NewServeMux()
 
-	h := NewSimpleWS()
+	h := NewSimpleWS(r)
 
 	wsHandler := NewWsServer(sws)
 	mux.Handle("GET /ws", wsHandler)
 	mux.HandleFunc("GET /healtz", h.healthCheck)
 	mux.HandleFunc("GET /list", h.listSensors)
+	mux.HandleFunc("GET /history", h.csHistory)
 	return withMiddleware(mux)
 }
 

@@ -6,16 +6,25 @@
 //
 // Any csi.<sensor_id> channel is accepted, so ?sensors= decides what it emits;
 // without it the tab subscribes to MOCK_SENSORS, there being no /list to ask.
+// GET /history is stood in for by mockHistory, built from the same scoreAt, so a
+// window reads the same whether it came from history or from the stream.
 //
-//   ?mock=1          live only, one window per subscribed sensor every 5s
-//   ?mock=1&seed=1   plus ~2h of backdated points, to exercise 6h/24h at once
-//   ?mock=1&flaky=1  plus a dropped connection at 45s
+//   ?mock=1          history for the selected window, plus one window per
+//                    subscribed sensor every 5s
+//   ?mock=1&seed=1   plus ~2h of points backdated over the socket itself
+//   ?mock=1&flaky=1  plus a dropped connection at 45s, to watch the gap refill
 
 import { NATIVE_WINDOW_MS } from './series.js';
 
 const SEED_SPAN_MS = 2 * 60 * 60_000;
 const HEARTBEAT_MS = 25_000;
+const HISTORY_LATENCY_MS = 300;
 const CSI_PREFIX = 'csi.';
+
+// Timestamps sit on the 5s grid, so history and live agree on (sensor, ts) for
+// the same window and the store's dedupe sees them as one point, as it does for
+// the real server.
+const slotOf = (tMs) => Math.floor(tMs / NATIVE_WINDOW_MS) * NATIVE_WINDOW_MS;
 
 export const MOCK_SENSORS = ['living-room', 'bedroom'];
 
@@ -86,10 +95,10 @@ class MockSocket {
     });
 
     this.timers.push(setInterval(() => {
-      const now = Date.now();
+      const slot = slotOf(Date.now());
       for (const ch of this.channels) {
-        const v = scoreAt(ch.slice(CSI_PREFIX.length), now);
-        if (v != null) this.#emit(ch, now, v);
+        const v = scoreAt(ch.slice(CSI_PREFIX.length), slot);
+        if (v != null) this.#emit(ch, slot, v);
       }
     }, NATIVE_WINDOW_MS));
 
@@ -99,7 +108,7 @@ class MockSocket {
 
   #backfill(channel) {
     const now = Date.now();
-    for (let t = now - SEED_SPAN_MS; t <= now; t += NATIVE_WINDOW_MS) {
+    for (let t = slotOf(now - SEED_SPAN_MS); t <= now; t += NATIVE_WINDOW_MS) {
       const v = scoreAt(channel.slice(CSI_PREFIX.length), t);
       if (v != null) this.#emit(channel, t, v);
     }
@@ -162,4 +171,21 @@ class MockSocket {
 
 export function mockFactory({ flaky = false, seed = false } = {}) {
   return (url) => new MockSocket(url, { flaky, seed });
+}
+
+/**
+ * Stand-in for GET /history: the same body the server sends, for windows in
+ * [from, to) of the given sensors, ordered by time.
+ */
+export async function mockHistory({ sensors, from, to }) {
+  await new Promise((r) => setTimeout(r, HISTORY_LATENCY_MS));
+  const history = [];
+  for (let t = slotOf(from); t < to; t += NATIVE_WINDOW_MS) {
+    if (t < from) continue;
+    for (const id of sensors) {
+      const v = scoreAt(id, t);
+      if (v != null) history.push({ sensor_id: id, timestamp: t, motion_score: v });
+    }
+  }
+  return { sensor_ids: sensors, from, to, history };
 }

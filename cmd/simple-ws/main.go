@@ -57,10 +57,11 @@ func main() {
 	log.Info().Msg("connected to ClickHouse")
 
 	writer := clickhouse.NewWriter(conn)
+	reader := clickhouse.NewReader(conn)
 
 	hub := ws.NewHub()
 	service := simplews.NewService(hub)
-	handler := httpapi.NewSimpleWSRouter(service)
+	handler := httpapi.NewSimpleWSRouter(service, reader)
 	s := &http.Server{
 		Handler:      handler,
 		ReadTimeout:  50 * time.Second,
