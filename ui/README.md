@@ -70,6 +70,17 @@ rows have piled up, so the last ~2 minutes (three sensors) to ~5 (one) are not i
 first connect or a dropped connection, is asked for again at 35 s, 2 min and 5 min,
 after which it must have landed. Until then it is a visible hole, not a flat line.
 
+**A past window** is picked with the date field next to the window buttons:
+it sets when the window ends, the buttons still set its width, and `‹ ›` move
+it by one width. It is read from `/history` alone into a store of its own, never
+trimmed, while the live store and the socket keep running underneath, so
+`⟲ Live` is instant. Widening a past window fetches only the part to the left
+of what is loaded; picking another date cancels a request still in flight. A
+window ending within the last 5 minutes is the live view, since ClickHouse would
+not have its tail yet. The line above the chart carries the date, which the
+axis does not. `?at=2026-11-02T18:30` (local time) or `?at=<unix ms>` opens one
+directly, and the URL keeps it.
+
 **The sensor cards** take "motion N ago" from history, so it is known at once;
 the state (Motion/Quiet/Silent) still waits for the first live point, since the
 last point in ClickHouse is minutes old by construction.
@@ -120,8 +131,8 @@ http://localhost:5173/?mock=1&seed=1   + 2 hours backdated over the socket itsel
 http://localhost:5173/?mock=1&flaky=1  + a dropped connection at the 45-second mark
 ```
 
-More parameters: `?sensors=living-room,bedroom`, `?range=6h`, `?scale=linear`,
-`?ws=wss://host/ws` — the view is shareable by link.
+More parameters: `?sensors=living-room,bedroom`, `?range=6h`, `?at=2026-11-02T18:30`,
+`?scale=linear`, `?ws=wss://host/ws` — the view is shareable by link.
 
 ### Deploying it
 

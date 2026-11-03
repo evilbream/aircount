@@ -28,6 +28,12 @@
 <main class="plot-wrap">
   <div class="plot-head">
     <div id="ranges" class="seg range-group" role="group" aria-label="Time window"></div>
+    <div id="at-group" class="seg at-group" role="group" aria-label="When the window ends">
+      <button id="at-prev" type="button" title="One window back" aria-label="One window back">‹</button>
+      <input id="at" type="datetime-local" step="60" class="at-input"
+             aria-label="Window ends at" title="When the window ends. Empty means now, the live view">
+      <button id="at-next" type="button" title="One window forward" aria-label="One window forward">›</button>
+    </div>
     <div class="plot-meta">
       <span id="collecting" class="hint"></span>
       <span id="window-hint" class="hint"></span>
@@ -90,6 +96,12 @@
     <b>The past comes from storage:</b> the selected window is loaded from the
     server's history, and new points arrive live. Storage runs a few minutes behind
     the live stream, so if the connection drops, the hole fills in a little later.
+  </p>
+  <p>
+    <b>To look at another day</b>, pick when the window should end in the date field
+    next to the window buttons; the buttons still set its width. <b>‹ ›</b> move it
+    back or forward by one width, and <b>⟲ Live</b> returns to now. The cards keep
+    showing the present.
   </p>
 </details>
 

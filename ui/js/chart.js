@@ -1,5 +1,5 @@
 // uPlot wiring: series, log/linear axis, follow mode, and the three overlays
-// that make the chart honest — the "API started here" band, the motion-detection
+// that make the chart honest — the "no data loaded" band, the motion-detection
 // ribbons, and the presence threshold line.
 
 import uPlot from 'uplot';
@@ -340,8 +340,9 @@ export class Chart {
   }
 
   /**
-   * Everything left of collecting_since is not "no motion", it is "we weren't
-   * running". Without this band an empty 24h axis reads as a quiet house.
+   * Everything left of collecting_since is not "no motion", it is "nothing
+   * loaded": history still on its way or failed, and only what the socket
+   * delivered is held. Without this band an empty axis reads as a quiet house.
    */
   #drawNoDataBand(u) {
     // With no sensors at all the empty-chart message says what is going on.
@@ -366,7 +367,7 @@ export class Chart {
     ctx.font = `${11 * dpr}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const label = 'no data — the API started here';
+    const label = 'no data loaded';
     if (xEnd - xStart > ctx.measureText(label).width + 16 * dpr) {
       ctx.fillText(label, (xStart + xEnd) / 2, bbox.top + bbox.height / 2);
     }

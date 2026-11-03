@@ -18,6 +18,9 @@
 // Both carry the server's observed_at, so the store merges them by (sensor,
 // timestamp). Splitting into a series per sensor_id, the windowing and the
 // bucketing all happen here. The handshake itself lives in ws.js.
+//
+// A past window (the date field, ?at=) is read from /history alone, into a
+// store of its own; the live one keeps running underneath.
 
 import {
   RawStore, Palette, RANGES, rangeById, bucketMsFor, NATIVE_WINDOW_MS, MOTION_THRESHOLD, fmtDur,
@@ -46,6 +49,9 @@ const SETTLE_DELAYS_MS = [35_000, 2 * 60_000, 5 * 60_000];
 // Slack around a socket outage: a window observed just before the drop may not
 // have been delivered.
 const GAP_PAD_MS = 2 * NATIVE_WINDOW_MS;
+// A window ending this close to now is the live view: ClickHouse would not have
+// its tail yet, and the live store does.
+const LIVE_SNAP_MS = SETTLE_DELAYS_MS.at(-1);
 
 const params = new URLSearchParams(location.search);
 const useMock = params.get('mock') === '1';
@@ -56,6 +62,8 @@ const initialRange = RANGES.some((r) => r.id === params.get('range')) ? params.g
 const initialLog = params.get('scale') === 'log';
 const initialJournal = params.get('journal') === '1';
 const initialBars = params.get('shape') === 'bars';
+// ?at=2026-11-02T18:30 (local time, as the date field writes it) or unix ms.
+const initialAt = parseAt(params.get('at'));
 // The UI deploys as a static folder that may or may not sit on the API's
 // origin, so the endpoint is resolved at runtime, never baked in: ?ws= for a
 // single tab, config.js for a standalone deploy, same origin otherwise.
@@ -78,10 +86,25 @@ function parseSensors(v) {
   return list.length ? [...new Set(list)] : null;
 }
 
+function parseAt(v) {
+  if (!v) return null;
+  // A date-time without an offset is local time, which is what the field shows.
+  const ms = /^\d+$/.test(v) ? Number(v) : new Date(v).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** The datetime-local field's format: local time, to the minute. */
+function toLocalInput(ms) {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 const $ = (id) => document.getElementById(id);
 const els = {
   chart: $('chart'), empty: $('chart-empty'), ribbons: $('ribbons'), rooms: $('rooms'),
   ranges: $('ranges'), scale: $('scale'), live: $('live-pill'),
+  atGroup: $('at-group'), at: $('at'), atPrev: $('at-prev'), atNext: $('at-next'),
   conn: $('conn'), connDot: $('conn-dot'), collecting: $('collecting'), mode: $('mode-badge'),
   hint: $('window-hint'), shape: $('shape'), journal: $('journal'), journalBtn: $('btn-journal'), journalRows: $('journal-rows'),
   journalStats: $('journal-stats'), journalPause: $('journal-pause'), journalClear: $('journal-clear'),
@@ -96,12 +119,34 @@ const state = {
   retryInMs: null,
   wsError: null,
   lastPointAt: null,
-  histBusy: false,
-  histError: null,
 };
 
 const palette = new Palette();
 const store = new RawStore();
+
+// Where the chart reads from and history goes. live is the store the socket
+// feeds, its window ending now. archive is a past window picked with the date
+// field, in a store of its own, so the live one keeps running underneath and
+// "⟲ Live" is instant. Each tracks its own request: a date picked mid-load
+// cancels the old one instead of waiting for it.
+const live = { store, end: () => Date.now(), busy: false, error: null, retry: null, ctl: null };
+let archive = null;
+const current = () => archive ?? live;
+
+function makeArchive(at) {
+  return {
+    store: new RawStore({ sinceMs: at }), at, end: () => at,
+    busy: false, error: null, retry: null, ctl: null, dropped: false,
+  };
+}
+
+function dropArchive() {
+  if (!archive) return;
+  archive.dropped = true;
+  clearTimeout(archive.retry);
+  archive.ctl?.abort();
+  archive = null;
+}
 const chart = new Chart({
   el: els.chart,
   ribbonEl: els.ribbons,
@@ -143,16 +188,28 @@ function scheduleRender() {
     // Rebuilt from raw every frame rather than merged incrementally: at these
     // rates it costs nothing and it means a range switch, a late point and a
     // brand-new sensor all take the exact same path.
-    const view = store.build({ rangeMs: rangeById(state.range).ms, threshold: MOTION_THRESHOLD });
+    const src = current();
+    const view = src.store.build({
+      rangeMs: rangeById(state.range).ms, nowMs: src.end(), threshold: MOTION_THRESHOLD,
+    });
     chart.render(view, { follow: state.following });
     rooms.render();
     els.empty.hidden = view.order.length > 0;
+    els.empty.textContent = emptyText(src);
     renderHint(view);
     renderCollecting();
   });
 }
 
-function renderLivePill() { els.live.hidden = state.following; }
+function emptyText(src) {
+  if (src === live) return 'Waiting for the first reading…';
+  if (src.busy) return 'Loading history…';
+  if (src.error) return 'History failed to load, retrying…';
+  return 'No data in this window';
+}
+
+// A past window always offers the way back, zoomed or not.
+function renderLivePill() { els.live.hidden = state.following && !archive; }
 
 // The axis is fitted to the data while the window is not yet full, so say so —
 // otherwise "5 min" over 39 seconds of data is a quietly wrong label.
@@ -162,6 +219,15 @@ function renderHint(view) {
 
 const fmtClock = (ms) =>
   new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+const fmtDay = (ms) => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+// The axis only shows times, so the line above it carries the date.
+function fmtSpan(from, to) {
+  if (new Date(from).toDateString() === new Date(to).toDateString()) {
+    return `${fmtDay(to)}, ${fmtClock(from)}–${fmtClock(to)}`;
+  }
+  return `${fmtDay(from)} ${fmtClock(from)} – ${fmtDay(to)} ${fmtClock(to)}`;
+}
 
 function renderConn() {
   const stale = state.wsState === 'live' && state.lastPointAt != null
@@ -203,17 +269,25 @@ function renderConn() {
 }
 
 function renderCollecting() {
-  const since = store.collectingSinceMs;
-  let text = `${fmtDur(Date.now() - since)} of data, since ${fmtClock(since)}`;
-  if (state.histBusy) text += ' · loading history…';
-  else if (state.histError) text += ` · history failed, retrying: ${state.histError}`;
+  const src = current();
+  let text;
+  if (src === live) {
+    const since = store.collectingSinceMs;
+    text = `${fmtDur(Date.now() - since)} of data, since ${fmtClock(since)}`;
+    els.collecting.title = store.coveredFromMs == null
+      ? 'History has not loaded, so everything on screen was collected by this tab from '
+        + 'the live stream and is gone on reload.'
+      : 'The selected window is loaded from ClickHouse (/history); new windows arrive over '
+        + 'the live stream. ClickHouse lags the stream by a few minutes, so anything the '
+        + 'stream missed is filled in once it lands there.';
+  } else {
+    text = fmtSpan(src.at - rangeById(state.range).ms, src.at);
+    els.collecting.title = 'A past window, loaded from ClickHouse (/history). It does not '
+      + 'move; ⟲ Live goes back to now.';
+  }
+  if (src.busy) text += ' · loading history…';
+  else if (src.error) text += ` · history failed, retrying: ${src.error}`;
   els.collecting.textContent = text;
-  els.collecting.title = store.coveredFromMs == null
-    ? 'History has not loaded, so everything on screen was collected by this tab from '
-      + 'the live stream and is gone on reload.'
-    : 'The selected window is loaded from ClickHouse (/history); new windows arrive over '
-      + 'the live stream. ClickHouse lags the stream by a few minutes, so anything the '
-      + 'stream missed is filled in once it lands there.';
 }
 
 // ---------------------------------------------------------------- controls
@@ -252,13 +326,15 @@ function buildRangeButtons() {
 function syncURL() {
   const q = new URLSearchParams(location.search);
   q.set('range', state.range);
+  if (archive) q.set('at', toLocalInput(archive.at)); else q.delete('at');
   if (state.log) q.set('scale', 'log'); else q.delete('scale');
   if (state.bars) q.set('shape', 'bars'); else q.delete('shape');
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 
 // The window is a view over the points this tab already holds; the server is
-// asked only for the part of a wider window that is not loaded yet.
+// asked only for the part of a wider window that is not loaded yet. In a past
+// window the end stays put and the width changes to the left of it.
 function selectRange(id) {
   state.range = id;
   state.following = true;
@@ -266,10 +342,66 @@ function selectRange(id) {
   markSeg(els.ranges, id);
   syncURL();
   scheduleRender();
-  ensureHistory();
+  ensureHistory(current());
 }
 
 onSeg(els.ranges, selectRange);
+
+// ---------------------------------------------------------------- window end
+
+function renderAt() {
+  els.at.value = archive ? toLocalInput(archive.at) : '';
+  els.atGroup.classList.toggle('past', archive != null);
+  els.atNext.disabled = archive == null;
+}
+
+function afterViewChange() {
+  renderAt();
+  renderLivePill();
+  syncURL();
+  renderCollecting();
+  scheduleRender();
+}
+
+/** Shows the window ending at `ms`; one ending within LIVE_SNAP_MS of now is the live view. */
+function setAt(ms) {
+  if (!Number.isFinite(ms) || ms > Date.now() - LIVE_SNAP_MS) {
+    goLive();
+    return;
+  }
+  // The field has minute resolution; keep the URL and the field in step.
+  const at = Math.floor(ms / 60_000) * 60_000;
+  if (archive?.at === at) return;
+  dropArchive();
+  archive = makeArchive(at);
+  state.following = true;
+  afterViewChange();
+  ensureHistory(archive);
+}
+
+function goLive() {
+  dropArchive();
+  state.following = true;
+  afterViewChange();
+  ensureHistory(live);
+}
+
+/** One window width back (-1) or forward (+1). Forward into the present is live. */
+function stepAt(dir) {
+  const base = archive?.at ?? Date.now();
+  setAt(base + dir * rangeById(state.range).ms);
+}
+
+// No future dates: the picker greys them out.
+els.at.addEventListener('focus', () => { els.at.max = toLocalInput(Date.now()); });
+// Fires once the value is a complete date and time, not on every keystroke;
+// clearing the field is "now".
+els.at.addEventListener('change', () => {
+  if (els.at.value) setAt(new Date(els.at.value).getTime());
+  else goLive();
+});
+els.atPrev.addEventListener('click', () => stepAt(-1));
+els.atNext.addEventListener('click', () => stepAt(+1));
 
 onSeg(els.scale, (value) => {
   state.log = value === 'log';
@@ -312,6 +444,10 @@ onSeg(els.shape, (value) => {
 });
 
 els.live.addEventListener('click', () => {
+  if (archive) {
+    goLive();
+    return;
+  }
   state.following = true;
   renderLivePill();
   scheduleRender();
@@ -364,19 +500,25 @@ const apiURL = (path) => new URL(path, wsURL.replace(/^ws/, 'http'));
 // subscribed to would show up as a line that never moves again.
 let historySensors = [];
 
-/** One [from, to) span, validated. Rows that do not parse are dropped, not fatal. */
-async function fetchHistory(fromMs, toMs) {
+/**
+ * One [from, to) span, validated. Rows that do not parse are dropped, not fatal.
+ * `cancel` aborts it, for a past window replaced while its request is in flight.
+ */
+async function fetchHistory(fromMs, toMs, cancel = null) {
   const from = Math.floor(fromMs);
   const to = Math.ceil(toMs);
   let body;
   if (useMock) {
     body = await mockHistory({ sensors: historySensors, from, to });
+    cancel?.throwIfAborted();
   } else {
     const url = apiURL('history');
     url.searchParams.set('sensor', historySensors.join(','));
     url.searchParams.set('from', String(from));
     url.searchParams.set('to', String(to));
-    const res = await fetch(url, { signal: AbortSignal.timeout(HISTORY_TIMEOUT_MS) });
+    const timeout = AbortSignal.timeout(HISTORY_TIMEOUT_MS);
+    const signal = cancel ? AbortSignal.any([timeout, cancel]) : timeout;
+    const res = await fetch(url, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     body = await res.json();
   }
@@ -395,62 +537,72 @@ async function fetchHistory(fromMs, toMs) {
   return points;
 }
 
-function applyHistory(points, coversFromMs) {
-  store.addHistory(points, coversFromMs);
-  const lastMotion = new Map();
-  for (const p of points) {
-    if (p.v < MOTION_THRESHOLD) continue;
-    const prev = lastMotion.get(p.sensorId);
-    if (prev == null || p.t > prev) lastMotion.set(p.sensorId, p.t);
+function applyHistory(src, points, coversFromMs) {
+  src.store.addHistory(points, coversFromMs);
+  // The cards are about now, so only live history feeds "motion N ago".
+  if (src === live) {
+    const lastMotion = new Map();
+    for (const p of points) {
+      if (p.v < MOTION_THRESHOLD) continue;
+      const prev = lastMotion.get(p.sensorId);
+      if (prev == null || p.t > prev) lastMotion.set(p.sensorId, p.t);
+    }
+    for (const [id, t] of lastMotion) rooms.seedMotion(id, t);
   }
-  for (const [id, t] of lastMotion) rooms.seedMotion(id, t);
   scheduleRender();
 }
 
-// Makes history reach back over the selected window. Only the part not loaded
-// yet is asked for, so 1h → 24h fetches the 23h before it, and going back to
-// 1h fetches nothing. One request at a time; a range picked meanwhile is
-// picked up when it returns.
-async function ensureHistory() {
-  if (state.histBusy || !historySensors.length) return;
-  clearTimeout(ensureHistory.retry);
+// Makes a source's history reach back over the selected window, which ends at
+// src.end(): now for live, the picked moment for a past window. Only the part
+// not loaded yet is asked for, so 1h → 24h fetches the 23h before it, and going
+// back to 1h fetches nothing. One request per source at a time; a range picked
+// meanwhile is picked up when it returns.
+async function ensureHistory(src) {
+  if (src.busy || src.dropped || !historySensors.length) return;
+  clearTimeout(src.retry);
 
   const rangeMs = rangeById(state.range).ms;
+  const end = src.end();
   // One bucket of slack, so the leftmost bucket is not built from a sliver.
-  const want = Date.now() - rangeMs - bucketMsFor(rangeMs);
-  const covered = store.coveredFromMs;
+  const want = end - rangeMs - bucketMsFor(rangeMs);
+  const covered = src.store.coveredFromMs;
   if (covered != null && covered <= want) {
-    state.histError = null;
+    src.error = null;
     renderCollecting();
     return;
   }
 
-  state.histBusy = true;
-  state.histError = null;
+  src.busy = true;
+  src.error = null;
+  src.ctl = new AbortController();
   renderCollecting();
   try {
-    applyHistory(await fetchHistory(want, covered ?? Date.now()), want);
+    applyHistory(src, await fetchHistory(want, covered ?? end, src.ctl.signal), want);
   } catch (err) {
-    state.histError = err?.message || String(err);
-    ensureHistory.retry = setTimeout(ensureHistory, HISTORY_RETRY_MS);
+    if (src.dropped) return; // replaced by another date or by live: nobody is waiting
+    src.error = err?.message || String(err);
+    src.retry = setTimeout(() => ensureHistory(src), HISTORY_RETRY_MS);
     return;
   } finally {
-    state.histBusy = false;
+    src.busy = false;
+    src.ctl = null;
     renderCollecting();
+    scheduleRender(); // the empty-chart message depends on busy
   }
-  ensureHistory();
+  ensureHistory(src);
 }
 
 // Asks for a stretch the socket did not deliver, on the SETTLE schedule, since
 // ClickHouse may not have it yet. Each attempt is the previous one's retry, and
-// points already held are skipped by the store, so repeats cost nothing.
+// points already held are skipped by the store, so repeats cost nothing. Live
+// only: a past window has no socket to miss anything.
 function settle(fromMs, toMs, { now = false } = {}) {
   if (!historySensors.length) return;
   const delays = now ? [0, ...SETTLE_DELAYS_MS] : SETTLE_DELAYS_MS;
   for (const d of delays) {
     setTimeout(async () => {
       try {
-        applyHistory(await fetchHistory(fromMs, toMs), null);
+        applyHistory(live, await fetchHistory(fromMs, toMs), null);
       } catch (err) {
         console.warn('/history refetch failed', err);
       }
@@ -499,6 +651,9 @@ if (useMock) {
 }
 
 buildRangeButtons();
+// Before the first render, so a ?at= link never flashes the live view.
+if (initialAt != null) setAt(initialAt);
+renderAt();
 renderLivePill();
 renderConn();
 renderCollecting();
@@ -521,8 +676,8 @@ setInterval(() => store.trim(), TRIM_EVERY_MS);
 // rather than as waiting.
 scheduleRender();
 // Keep the axis moving while the stream is quiet, so "no data" stays visibly
-// distinct from "frozen".
-setInterval(() => { if (state.following) scheduleRender(); }, 5000);
+// distinct from "frozen". A past window is meant to stand still.
+setInterval(() => { if (state.following && !archive) scheduleRender(); }, 5000);
 
 async function fetchSensors() {
   const res = await fetch(apiURL('list'), { signal: AbortSignal.timeout(LIST_TIMEOUT_MS) });
@@ -538,7 +693,10 @@ function startSocket(sensors) {
   rooms.setSensors(sensors);
   ws.setChannels(channels);
   ws.start();
-  ensureHistory();
+  // Live too when a past window is open: the cards' "motion N ago" comes from
+  // it, and "⟲ Live" should not start from an empty chart.
+  ensureHistory(live);
+  if (archive) ensureHistory(archive);
 }
 
 // Nothing to subscribe to until the list arrives, so keep asking rather than

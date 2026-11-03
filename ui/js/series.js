@@ -182,15 +182,20 @@ function sortCol(col) {
   col.v = v;
 }
 
-/** Every point received, per sensor, capped at the longest selectable window. */
+/**
+ * Every point received, per sensor. The live store is capped at the longest
+ * selectable window by trim(); a store for a past window is never trimmed.
+ */
 export class RawStore {
-  constructor({ maxAgeMs = MAX_AGE_MS } = {}) {
+  /** @param {number} sinceMs  what is known from the start: now for the live
+   *   store, the window's end for a past one (nothing of it is loaded yet). */
+  constructor({ maxAgeMs = MAX_AGE_MS, sinceMs = Date.now() } = {}) {
     this.maxAgeMs = maxAgeMs;
     this.raw = new Map();       // sensorId -> { t: number[], v: number[], seen: Set<number> }
-    // Until history arrives, nothing before the page connected is known. The
-    // UI states this rather than drawing an empty axis that reads as "nobody
-    // moved"; a history load moves it back to where the server's answer starts.
-    this.collectingSinceMs = Date.now();
+    // Until history arrives, nothing before sinceMs is known. The UI states
+    // this rather than drawing an empty axis that reads as "nobody moved"; a
+    // history load moves it back to where the server's answer starts.
+    this.collectingSinceMs = sinceMs;
     // Start of the span GET /history has answered for, null until it has. From
     // here on an empty stretch is a real "no data", not "not loaded".
     this.coveredFromMs = null;

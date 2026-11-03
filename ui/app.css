@@ -194,9 +194,33 @@ button:focus-visible, summary:focus-visible {
   border-color: rgba(255, 180, 84, .45);
 }
 
+/* The end of the window: empty and muted while live, warm once it is a past
+   moment, so a frozen chart is never mistaken for a quiet house. */
+.at-group { flex: none; }
+.at-group button { flex: none; padding-inline: 10px; }
+.at-group button:disabled { opacity: .35; cursor: default; }
+.at-input {
+  appearance: none;
+  min-width: 0;
+  margin-left: -1px;
+  padding: 4px 8px;
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color-scheme: dark;
+}
+.at-group.past .at-input {
+  color: var(--warn);
+  border-color: rgba(255, 180, 84, .45);
+  position: relative;
+  z-index: 1;
+}
+
 /* A sticky :hover after a tap would read as a second selected option. */
 @media (hover: hover) {
-  .seg button:not(.active):hover, .toggle:hover, .live-pill:hover, .room:hover {
+  .seg button:not(.active):not(:disabled):hover, .toggle:hover, .live-pill:hover, .room:hover {
     color: var(--text);
     border-color: #333d48;
   }
@@ -367,7 +391,7 @@ button:focus-visible, summary:focus-visible {
 
 /* Fingers need a target of about 40px. */
 @media (pointer: coarse), (max-width: 700px) {
-  .seg button, .toggle, .live-pill { min-height: 40px; }
+  .seg button, .toggle, .live-pill, .at-input { min-height: 40px; }
   .toggle.small { min-height: 34px; padding: 4px 12px; font-size: 13px; }
   .live-pill { min-height: 32px; padding: 3px 12px; }
   .help summary { padding: 8px 0; }
@@ -376,6 +400,8 @@ button:focus-visible, summary:focus-visible {
 
 @media (max-width: 560px) {
   .range-group { flex-basis: 100%; max-width: none; }
+  .at-group { flex: 1 1 100%; }
+  .at-input { flex: 1; }
   .seg button { padding-inline: 8px; }
   .plot-wrap { padding: 8px; }
 
