@@ -16,6 +16,13 @@ export const NATIVE_WINDOW_MS = 5000; // one CSI window per sensor per 5s
 // so the chart applies the same threshold client-side and says so.
 export const MOTION_THRESHOLD = 0.06;
 
+// The kitchen and bedroom boards were flashed with each other's sensor_id. The
+// stream and ClickHouse keep the ids as sent; only what the page shows is
+// swapped. The id stays the key everywhere else: colours, ?sensors=, /history.
+const SENSOR_LABELS = { bedroom: 'kitchen', kitchen: 'bedroom' };
+
+export const sensorLabel = (id) => SENSOR_LABELS[id] ?? id;
+
 export const RANGES = [
   { id: '5m',  label: '5 min',   ms: 5 * 60_000 },
   { id: '10m', label: '10 min',  ms: 10 * 60_000 },

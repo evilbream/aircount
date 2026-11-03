@@ -5,7 +5,7 @@
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 
-import { Palette, NATIVE_WINDOW_MS, fmtScore } from './series.js';
+import { Palette, NATIVE_WINDOW_MS, fmtScore, sensorLabel } from './series.js';
 import { bindTouch } from './touch.js';
 
 const LOG_FLOOR = 1e-4;
@@ -188,7 +188,7 @@ export class Chart {
     const series = [
       { label: 'time' },
       ...this.sensors.map((id, i) => ({
-        label: id,
+        label: sensorLabel(id),
         show: !this.hidden.has(id),
         stroke: this.palette.colorFor(id),
         fill: this.bars ? withAlpha(this.palette.colorFor(id), 0.55) : undefined,
@@ -304,7 +304,7 @@ export class Chart {
       swatch.style.background = this.palette.colorFor(id);
       const name = document.createElement('span');
       name.className = 'tip-name';
-      name.textContent = id;
+      name.textContent = sensorLabel(id);
       const val = document.createElement('span');
       val.className = 'tip-val';
       row.append(swatch, name, val);
@@ -425,7 +425,7 @@ export class Chart {
     for (const id of this.sensors) {
       const row = document.createElement('div');
       row.className = 'ribbon-row';
-      row.title = `${id}: motion_score above threshold`;
+      row.title = `${sensorLabel(id)}: motion_score above threshold`;
 
       const track = document.createElement('div');
       track.className = 'ribbon-track';

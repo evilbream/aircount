@@ -11,7 +11,7 @@
 // exception is "motion N ago" seeded from history: there is no arrival time for
 // it, so it uses observed_at, which the server stamps with its own clock.
 
-import { fmtDur, fmtScore } from './series.js';
+import { fmtDur, fmtScore, sensorLabel } from './series.js';
 
 function span(cls) {
   const el = document.createElement('span');
@@ -92,7 +92,7 @@ export class Rooms {
     const swatch = span('swatch');
     swatch.style.background = this.palette.colorFor(id);
     const label = span('room-label');
-    label.textContent = id;
+    label.textContent = sensorLabel(id);
     name.append(swatch, label);
 
     room = {
