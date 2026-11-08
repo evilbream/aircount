@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     environment:
       CLICKHOUSE_DB: maindb
-      CLICKHOUSE_USER: ${CLICKHOUSE_DB:-aircount}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:

@@ -15,6 +15,6 @@ datasources:
       port: 9000
       protocol: native
       username: $CLICKHOUSE_USER
-      defaultDatabase: $CLICKHOUSE_DB
+      defaultDatabase: $CLICKHOUSE_DATABASE
     secureJsonData:
       password: $CLICKHOUSE_PASSWORD
