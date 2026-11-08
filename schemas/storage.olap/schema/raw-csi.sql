@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS maindb.csi_windows (
     uptime_ms    UInt64  CODEC(Delta, ZSTD(1))
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(observed_at)
+PARTITION BY toYYYYMMDD(observed_at)
 ORDER BY (sensor_id, observed_at)
-TTL toDateTime(observed_at) + INTERVAL 1 YEAR DELETE
+TTL toDateTime(observed_at) + INTERVAL 3 DAY DELETE
 SETTINGS ttl_only_drop_parts = 1;

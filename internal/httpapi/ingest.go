@@ -64,3 +64,7 @@ func (h *Ingesthandler) ingest(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(ctx, w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+func (h *Ingesthandler) metrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(r.Context(), w, http.StatusOK, map[string]string{"status": "ok"})
+}

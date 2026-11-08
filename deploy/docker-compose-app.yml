@@ -1,0 +1,23 @@
+
+
+services:
+  aircount-ingest:
+    build:
+      context: ..
+      dockerfile: cmd/ingest-gateway/Dockerfile
+    container_name: ingest
+    restart: unless-stopped
+    environment:
+      PLATFORM: docker
+      MQTT_BROKER: ${MQTT_BROKER:-mqtt://mosquitto:1883}
+      MQTT_CLIENT_ID: ingest
+      MQTT_TOPIC: aircount/+/batch
+      PORT: ${PORT:-8080}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-maindb}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-localhost}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
+      KAFKA_SCHEMA_REGISTRY_URL: ${KAFKA_SCHEMA_REGISTRY_URL:-http://localhost:8085}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
+      SENSORS: ${SENSORS:-living-room,bedroom,kitchen}

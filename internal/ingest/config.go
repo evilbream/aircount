@@ -7,9 +7,10 @@ import (
 )
 
 type Config struct {
-	MQTT     config.MQTT
-	Kafka    config.Kafka
-	HTTPPort int
+	MQTT       config.MQTT
+	Kafka      config.Kafka
+	HTTPPort   int
+	ClickHouse config.ClickHouse
 }
 
 func Load() (Config, error) {
@@ -20,15 +21,20 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		MQTT:     config.LoadMQTT(),
-		Kafka:    config.LoadKafka(""),
-		HTTPPort: port,
+		MQTT:       config.LoadMQTT(),
+		Kafka:      config.LoadKafka(""),
+		HTTPPort:   port,
+		ClickHouse: config.LoadClickHouse(),
 	}
 
 	if err := cfg.MQTT.Validate(); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.Kafka.Validate(); err != nil {
+		return Config{}, err
+	}
+
+	if err := cfg.ClickHouse.Validate(); err != nil {
 		return Config{}, err
 	}
 

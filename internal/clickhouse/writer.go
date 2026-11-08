@@ -42,12 +42,12 @@ func (w *Writer) PublishDevices(ctx context.Context, d domain.DetectionBatch) er
 	return nil
 }
 
-func (w *Writer) flushCSI(ctx context.Context) error {
+func (w *Writer) flushCSI(ctx context.Context, force bool) error {
 	w.mu.Lock()
 	rows := w.csiBatch
 	w.mu.Unlock()
 
-	if len(rows) < flushBatchSize {
+	if force || len(rows) < flushBatchSize {
 		return nil
 	}
 	if err := w.insertCSI(ctx, rows); err != nil {
@@ -87,14 +87,17 @@ func (w *Writer) insertCSI(ctx context.Context, rows []domain.CSIWindow) error {
 func (w *Writer) Run(ctx context.Context) error {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
-
+	log.Info().Msg("ClickHouse writer started")
 	for {
 		select {
 		case <-ctx.Done():
+			fctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			w.flushCSI(fctx, true)
 			return ctx.Err()
 		case <-ticker.C:
 
-			if err := w.flushCSI(ctx); err != nil {
+			if err := w.flushCSI(ctx, false); err != nil {
 				log.Error().Err(err).Msg("failed to write data to clickhouse")
 			}
 

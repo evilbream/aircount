@@ -5,7 +5,11 @@ associates with the home Wi-Fi and, on that channel, runs two
 independent signal sources at once:
 
 - **MAC sniffer** — promiscuous capture of management + data frames →
-  unique device MACs with RSSI (the *who*).
+  unique device MACs with RSSI (the *who*). Access points (beacons,
+  probe responses, the AP side of data traffic) are filtered out. It
+  also lists the hosts whose traffic our AP forwards into the 2.4 GHz
+  network, which is how 5 GHz clients become visible (see `relayed`
+  below).
 - **CSI / Wi-Fi sensing** — variance of channel-state amplitude over a
   window → a motion score (the *is-someone-moving*, even with no phone).
 
@@ -80,18 +84,51 @@ sensor as `offline` if it loses power or drops off — no polling.
   "window_ms": 5000,
   "devices": [
     { "mac": "aa:bb:cc:dd:ee:ff", "rssi": -52, "channel": 6,
-      "frames": 12, "random": false }
+      "frames": 12, "random": false },
+    { "mac": "da:a1:19:3c:07:5e", "rssi": -61, "channel": 9,
+      "frames": 2, "random": true, "fp": "de6d4e7c" }
+  ],
+  "relayed": [
+    { "mac": "90:2c:09:97:45:eb", "frames": 3, "random": false }
   ],
   "csi": { "packets": 48, "motion_score": 0.137, "subcarriers": 64 }
 }
 ```
 
+- `devices` — radios this board heard **transmitting** (addr2 of the
+  802.11 header). Not included: frames sent by an access point. A
+  management frame whose transmitter equals its BSSID counts as the AP's,
+  and so do FromDS/WDS data frames. `rssi` is the device's own signal,
+  so it says something about distance to this sensor.
+- `fp` — present only if the MAC sent a probe request this window. It is
+  a hash (FNV-1a, 8 hex digits) of the probe's information elements:
+  their order, supported rates, HT/VHT/HE capabilities, extended
+  capabilities, and vendor OUIs. Left out because they change between
+  probes: SSID, channel, current operating class, vendor IE payload.
+  These describe the chipset + OS build, so `fp` stays the same when
+  the phone randomizes its MAC. The same `fp` across different random
+  MACs means one device, or identical models on the same OS version. An
+  OS update can change it. A phone may also send 2–3 different IE sets
+  (e.g. with/without P2P), which gives 2–3 fps for one device.
+- `relayed` — hosts whose frames **our AP forwarded** into the 2.4 GHz
+  BSS (addr3 = original source of FromDS frames sent by the BSSID we are
+  associated with). The router repeats broadcast/multicast traffic
+  (mDNS, ARP, SSDP) on every band, so clients of the 5 GHz SSID, and
+  wired hosts, show up here even though this radio can't hear 5 GHz.
+  There is no `rssi`/`channel`, because the signal is the router's and
+  says nothing about where the host is. Filtered out: our own echoed
+  broadcasts, neighbours' APs, and the router's own MACs (same bytes 1..4
+  as the BSSID). A host is listed only in a window in which it sent
+  broadcast traffic, so a phone in deep sleep can be missing for a while.
+
 - The device has no RTC: it sends `uptime_ms` only; the gateway stamps
   the authoritative ingest time.
 - `random: true` means the MAC has the locally-administered bit set
-  (randomized). Stable home MACs (used when a phone is associated to the
-  home AP) come through with `random: false` — those are the ones the
-  registry maps to people.
+  (randomized). In `devices` these are mostly probe requests with
+  throwaway MACs. In `relayed`, a random MAC is usually the phone's
+  per-network "private address", which stays the same on the home
+  network. It is the same MAC the router's client list shows, so it can
+  be joined with router-poller.
 - `motion_score` is raw amplitude variance; thresholding lives
   downstream in `csi-processor`.
 

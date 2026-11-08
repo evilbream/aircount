@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"poltergeist/internal/metrics"
 	simplews "poltergeist/internal/simple-ws"
 	"runtime/debug"
 	"time"
@@ -13,14 +14,15 @@ import (
 
 const requestIDHeader = "X-Request-ID"
 
-func NewIngestRouter(is ingestService) http.Handler {
+func NewIngestRouter(is ingestService, m *metrics.HTTP, metricsHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	h := NewIngestHandler(is)
 
 	mux.HandleFunc("GET /healtz", h.healthCheck)
 	mux.HandleFunc("POST /ingest", h.ingest)
-	return withMiddleware(mux)
+	mux.Handle("GET /metrics", metricsHandler)
+	return withMiddleware(mux, m)
 
 }
 
@@ -31,7 +33,7 @@ func NewPresenceRouter(ps presenceService) http.Handler {
 
 	mux.HandleFunc("GET /healtz", healthCheck)
 	mux.HandleFunc("POST /listLastPresence", h.listLastPresence)
-	return withMiddleware(mux)
+	return withMiddleware(mux, nil)
 
 }
 
@@ -45,11 +47,11 @@ func NewSimpleWSRouter(sws *simplews.Service, r csiHistoryReader) http.Handler {
 	mux.HandleFunc("GET /healtz", h.healthCheck)
 	mux.HandleFunc("GET /list", h.listSensors)
 	mux.HandleFunc("GET /history", h.csHistory)
-	return withMiddleware(mux)
+	return withMiddleware(mux, nil)
 }
 
-func withMiddleware(next http.Handler) http.Handler {
-	return requestID(recoverer(logging(next)))
+func withMiddleware(next http.Handler, m *metrics.HTTP) http.Handler {
+	return requestID(m.Middleware(recoverer(logging(next))))
 }
 
 func recoverer(next http.Handler) http.Handler {

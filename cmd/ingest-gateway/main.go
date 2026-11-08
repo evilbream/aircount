@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"poltergeist/internal/clickhouse"
 	"poltergeist/internal/httpapi"
 	"poltergeist/internal/ingest"
 	"poltergeist/internal/kafka"
+	"poltergeist/internal/metrics"
 	"poltergeist/internal/mqtt"
 	"poltergeist/internal/platform"
 	"poltergeist/internal/system"
@@ -51,13 +53,26 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to create Kafka encoder")
 	}
 
+	reg := metrics.NewRegistry()
+	httpMetrics := metrics.NewHTTP(reg)
+	ingestMetrics := ingest.NewMetrics(reg)
+
+	conn, err := clickhouse.Open(ctx, appCfg.ClickHouse)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to ClickHouse")
+	}
+	log.Info().Msg("connected to ClickHouse")
+
+	writer := clickhouse.NewWriter(conn)
+	// reader := clickhouse.NewReader(conn)
+
 	publisher := kafka.NewProducer(kClient, enc)
-	ingestService := ingest.NewService(publisher, nil)
+	ingestService := ingest.NewInstrumentedService(ingest.NewService(ingest.Fanout(publisher, writer), nil), ingestMetrics)
 	mqttConsumer := mqtt.NewConsumer(appCfg.MQTT, ingestService)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", appCfg.HTTPPort),
-		Handler:           httpapi.NewIngestRouter(ingestService),
+		Handler:           httpapi.NewIngestRouter(ingestService, httpMetrics, metrics.Handler(reg)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		//WriteTimeout:      10 * time.Second,
@@ -80,6 +95,14 @@ func main() {
 	g.Go(func() error {
 		if err := mqttConsumer.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("failed to start MQTT consumer")
+			return err
+		}
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := writer.Run(ctx); err != nil {
+			log.Error().Err(err).Msg("failed to run ClickHouse writer")
 			return err
 		}
 		return nil
