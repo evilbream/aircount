@@ -18,3 +18,15 @@ datasources:
       defaultDatabase: $CLICKHOUSE_DATABASE
     secureJsonData:
       password: $CLICKHOUSE_PASSWORD
+  
+  - name: PostgreSQL
+    uid: postgres
+    type: grafana-postgresql-datasource
+    url: ${POSTGRES_HOST}:${POSTGRES_PORT}
+    user: $POSTGRES_GRAFANA_USER
+    jsonData:
+      database: $POSTGRES_DB
+      sslmode: disable
+      maxOpenConns: 5
+    secureJsonData:
+      password: $POSTGRES_GRAFANA_PASSWORD

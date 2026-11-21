@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"poltergeist/internal/system"
 
@@ -132,6 +133,38 @@ func (c ClickHouse) Validate() error {
 	}
 	if strings.TrimSpace(c.Database) == "" {
 		return fmt.Errorf("clickhouse: database is empty (set CLICKHOUSE_DATABASE)")
+	}
+	return nil
+}
+
+type Router struct {
+	Host         string
+	Username     string
+	Password     string
+	PollInterval time.Duration
+}
+
+func LoadRouter() Router {
+	return Router{
+		Host:         system.EnvDefault("ROUTER_HOST", "localhost"),
+		Username:     system.EnvDefault("ROUTER_USERNAME", "admin"),
+		Password:     system.EnvDefault("ROUTER_PASSWORD", "admin"),
+		PollInterval: system.EnvDefaultDuration("ROUTER_POLL_INTERVAL", 30*time.Second),
+	}
+}
+
+func (r Router) Validate() error {
+	if strings.TrimSpace(r.Host) == "" {
+		return fmt.Errorf("router: host is empty (set ROUTER_HOST)")
+	}
+	if strings.TrimSpace(r.Username) == "" {
+		return fmt.Errorf("router: username is empty (set ROUTER_USERNAME)")
+	}
+	if strings.TrimSpace(r.Password) == "" {
+		return fmt.Errorf("router: password is empty (set ROUTER_PASSWORD)")
+	}
+	if r.PollInterval <= 0 {
+		return fmt.Errorf("router: poll interval is invalid (set ROUTER_POLL_INTERVAL)")
 	}
 	return nil
 }

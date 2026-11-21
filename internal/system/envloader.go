@@ -130,3 +130,10 @@ func EnvList(key string, def []string) []string {
 	}
 	return def
 }
+
+func EnvDefaultDuration(key string, def time.Duration) time.Duration {
+	if v := EnvDuration(key, def); v > 0 {
+		return v
+	}
+	return def
+}
