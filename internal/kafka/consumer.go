@@ -11,6 +11,7 @@ import (
 type Consumer struct {
 	client *kgo.Client
 	enc    *Encoder
+	commit bool // false for group-less clients (e.g. compacted presence.device)
 }
 type CSIWindowHandler = func(ctx context.Context, presence *domain.CSIWindow) error
 type PresenceRFHandler = func(ctx context.Context, presence *domain.PresenceRF) error
@@ -18,7 +19,8 @@ type RouterSnapshotHandler = func(ctx context.Context, s *domain.RouterSnapshot)
 type PresenceDeviceHandler = func(ctx context.Context, d *domain.DevicePresence) error
 
 func NewConsumer(client *kgo.Client, encoder *Encoder) *Consumer {
-	return &Consumer{client: client, enc: encoder}
+	group, _ := client.OptValue(kgo.ConsumerGroup).(string)
+	return &Consumer{client: client, enc: encoder, commit: group != ""}
 }
 
 func consume[T any](ctx context.Context, c *Consumer, decode func([]byte) (*T, error),
@@ -48,9 +50,10 @@ func consume[T any](ctx context.Context, c *Consumer, decode func([]byte) (*T, e
 			} else if err := handler(ctx, w); err != nil {
 				return err // no commit, retry
 			}
-			if err := c.client.CommitRecords(ctx, record); err != nil {
-				return err
-
+			if c.commit {
+				if err := c.client.CommitRecords(ctx, record); err != nil {
+					return err
+				}
 			}
 		}
 
