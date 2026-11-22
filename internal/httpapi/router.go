@@ -14,6 +14,16 @@ import (
 
 const requestIDHeader = "X-Request-ID"
 
+func NewWifiRouter(m *metrics.HTTP, metricsHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+
+	h := NewIngestHandler(nil)
+
+	mux.HandleFunc("GET /healtz", h.healthCheck)
+	mux.Handle("GET /metrics", metricsHandler)
+	return withMiddleware(mux, m)
+}
+
 func NewIngestRouter(is ingestService, m *metrics.HTTP, metricsHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
 

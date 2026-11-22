@@ -2,6 +2,7 @@ package tplink
 
 import (
 	"context"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -126,6 +127,79 @@ func (c *Client) GetDHCPLeases(ctx context.Context) ([]Lease, error) {
 	out := make([]Lease, 0, len(raw))
 	for _, r := range raw {
 		out = append(out, Lease{normMAC(r.MAC), r.IP, r.Name, r.LeaseTime})
+	}
+	return out, nil
+}
+
+// ClientInfo is one entry of the Game Accelerator device list
+// (admin/smart_network?form=game_accelerator, loadDevice).
+type ClientInfo struct {
+	MAC  string // lowercase aa:bb:cc:..., same as Device.MAC
+	IP   string
+	Name string // DHCP hostname or the name set in the router UI
+	Type string // UI icon category: pc, phone, other, ...
+	Band Band
+
+	Signal int           // RSSI at the router, dBm; 0 for wired
+	Online time.Duration // since the device connected
+
+	Traffic         uint64 // total bytes passed through the device
+	UpBytesPerSec   uint64 // current upload speed (direction assumed client→router)
+	DownBytesPerSec uint64 // current download speed
+
+	TxMbps float64 // Wi-Fi PHY link rate router→client
+	RxMbps float64 // Wi-Fi PHY link rate client→router
+
+	Priority       bool          // QoS "game accelerator" priority enabled
+	PriorityRemain time.Duration // left of a time-limited priority; 0 = off or unlimited
+}
+
+type rawClientInfo struct {
+	MAC            string `json:"mac"`
+	IP             string `json:"ip"`
+	Name           string `json:"deviceName"`
+	Type           string `json:"deviceType"`
+	Tag            string `json:"deviceTag"` // "5G", "2.4G", "wired"
+	Signal         num    `json:"signal"`
+	OnlineTime     num    `json:"onlineTime"`    // seconds
+	TrafficUsage   num    `json:"trafficUsage"`  // bytes
+	UploadSpeed    num    `json:"uploadSpeed"`   // bytes/s
+	DownloadSpeed  num    `json:"downloadSpeed"` // bytes/s
+	TxRate         num    `json:"txrate"`        // kbit/s
+	RxRate         num    `json:"rxrate"`        // kbit/s
+	EnablePriority bool   `json:"enablePriority"`
+	RemainTime     num    `json:"remainTime"` // seconds
+}
+
+func seconds(n num) time.Duration { return time.Duration(float64(n) * float64(time.Second)) }
+
+func (c *Client) GetClientsInfo(ctx context.Context) ([]ClientInfo, error) {
+	var raw []rawClientInfo
+	if err := c.call(ctx, "admin/smart_network?form=game_accelerator", "loadDevice", &raw); err != nil {
+		return nil, err
+	}
+
+	out := make([]ClientInfo, 0, len(raw))
+	for _, r := range raw {
+		if r.Tag == "offline" || r.IP == "0.0.0.0" {
+			continue // skip offline devices
+		}
+		out = append(out, ClientInfo{
+			MAC:             normMAC(r.MAC),
+			IP:              r.IP,
+			Name:            r.Name,
+			Type:            r.Type,
+			Band:            bandOf(r.Tag),
+			Signal:          int(r.Signal),
+			Online:          seconds(r.OnlineTime),
+			Traffic:         uint64(r.TrafficUsage),
+			UpBytesPerSec:   uint64(r.UploadSpeed),
+			DownBytesPerSec: uint64(r.DownloadSpeed),
+			TxMbps:          float64(r.TxRate) / 1000,
+			RxMbps:          float64(r.RxRate) / 1000,
+			Priority:        r.EnablePriority,
+			PriorityRemain:  seconds(r.RemainTime),
+		})
 	}
 	return out, nil
 }

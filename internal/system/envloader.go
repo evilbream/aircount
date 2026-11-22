@@ -2,6 +2,7 @@ package system
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,6 +36,15 @@ func findFileInProjectRoot(filename string) (string, error) {
 		dir = parentDir
 	}
 	return "", os.ErrNotExist // file not found in project root
+}
+
+func LoadLocalEnv() error {
+	for _, f := range []string{".env.local", "deploy/.env"} {
+		if err := LoadEnv(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // LoadEnv loads environment variables from a .env file. If the file is not found in the current directory,

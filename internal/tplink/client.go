@@ -10,13 +10,18 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"poltergeist/internal/system"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 )
 
 var (
-	ErrNotLoggedIn  = errors.New("tplink: not logged in")
-	ErrUnauthorized = errors.New("tplink: unauthorized")
+	ErrSessionExpired = errors.New("tplink: session expired")
+	ErrNotLoggedIn    = errors.New("tplink: not logged in")
+	ErrUnauthorized   = errors.New("tplink: unauthorized")
 )
 
 type Client struct {
@@ -28,14 +33,21 @@ type Client struct {
 	hash                     string
 	stok                     string
 	sysauth                  string
+	sessionPath              string // in ideal world its universal storage there and its interface, but im lazy so there is files
 }
 
 func New(host, username, password string) *Client {
+	sessionStore, err := system.GetOrCreateTempFile("tplink-*.json")
+	if err != nil {
+		log.Error().Err(err).Msg("failed to access filesystem to create or get temp file")
+	}
+
 	return &Client{
-		host:     host,
-		username: username,
-		password: password,
-		http:     &http.Client{Timeout: 10 * time.Second},
+		host:        host,
+		username:    username,
+		password:    password,
+		http:        &http.Client{Timeout: 10 * time.Second},
+		sessionPath: sessionStore,
 	}
 }
 
@@ -50,6 +62,32 @@ func (c *Client) url(path string) string {
 }
 
 func (c *Client) Login(ctx context.Context) error {
+	loadErr := c.loadSession()
+
+	if loadErr != nil {
+		log.Error().Err(loadErr).Msg("tplink: failed to load session")
+	}
+
+	if loadErr == nil {
+		if c.ping(ctx) == nil {
+			log.Debug().Str("session", c.sessionPath).Msg("tplink: session valid")
+			return nil
+		}
+		log.Debug().Str("session", c.sessionPath).Msg("tplink: session expired, logging in")
+	}
+
+	if err := c.login(ctx); err != nil {
+		return err
+	}
+	log.Debug().Str("session", c.sessionPath).Msg("tplink: login successful")
+	if err := c.saveSession(); err != nil {
+		log.Error().Err(err).Msg("tplink: failed to save session")
+	}
+	log.Debug().Str("session", c.sessionPath).Msg("tplink: session saved")
+	return nil
+}
+
+func (c *Client) login(ctx context.Context) error {
 	var keys struct {
 		Password []string `json:"password"`
 	}
@@ -107,8 +145,16 @@ func (c *Client) Logout(ctx context.Context) error {
 	return err
 }
 
+func (c *Client) ping(ctx context.Context) error {
+	var r json.RawMessage
+	if err := c.callOnce(ctx, "admin/status?form=all", "read", &r); err != nil {
+		return err
+	}
+	return nil
+}
+
 // call: a JSON payload {"operation": op}, encrypted and signed; the decrypted data goes into out.
-func (c *Client) call(ctx context.Context, endpoint, op string, out any) error {
+func (c *Client) callOnce(ctx context.Context, endpoint, op string, out any) error {
 	if c.stok == "" {
 		return ErrNotLoggedIn
 	}
@@ -118,6 +164,23 @@ func (c *Client) call(ctx context.Context, endpoint, op string, out any) error {
 		return err
 	}
 	return json.Unmarshal(data, out)
+}
+
+// call: a JSON payload {"operation": op}, encrypted and signed; the decrypted data goes into out.
+func (c *Client) call(ctx context.Context, endpoint, op string, out any) error {
+	err := c.callOnce(ctx, endpoint, op, out)
+
+	if !errors.Is(err, ErrSessionExpired) && !errors.Is(err, ErrNotLoggedIn) && !errors.Is(err, ErrUnauthorized) {
+		return err
+	}
+	log.Debug().Str("session", c.sessionPath).Msg("tplink: session lost, logging in")
+	if err := c.login(ctx); err != nil {
+		return err
+	}
+	if err := c.saveSession(); err != nil {
+		log.Error().Err(err).Msg("tplink: failed to save session")
+	}
+	return c.callOnce(ctx, endpoint, op, out)
 }
 
 func (c *Client) do(ctx context.Context, path string, payload []byte, login bool) (json.RawMessage, error) {
@@ -193,6 +256,49 @@ func (c *Client) post(ctx context.Context, path, body string) ([]byte, []*http.C
 		return nil, nil, fmt.Errorf("tplink: http %d", resp.StatusCode)
 	}
 	return raw, resp.Cookies(), nil
+}
+
+type session struct {
+	Stok    string `json:"stok"`
+	Sysauth string `json:"sysauth"`
+	AESKey  string `json:"aes_key"`
+	AESIV   string `json:"aes_iv"`
+	SignN   string `json:"sign_n"` // hex
+	SignE   string `json:"sign_e"` // hex
+	Seq     int    `json:"seq"`
+}
+
+func (c *Client) saveSession() error {
+	b, err := json.Marshal(session{
+		Stok: c.stok, Sysauth: c.sysauth,
+		AESKey: c.aes.key, AESIV: c.aes.iv,
+		SignN: c.signKey.n.Text(16), SignE: c.signKey.e.Text(16),
+		Seq: c.seq,
+	})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(c.sessionPath, b, 0o600) // в файле токен и ключ, доступ только владельцу
+}
+
+func (c *Client) loadSession() error {
+	b, err := os.ReadFile(c.sessionPath)
+	if err != nil {
+		return err
+	}
+	var s session
+	if len(b) == 0 || json.Unmarshal(b, &s) != nil || s.Stok == "" {
+		return ErrNotLoggedIn // файл только что создан или битый
+	}
+	key, err := parseRSA(s.SignN, s.SignE)
+	if err != nil {
+		return err
+	}
+	c.stok, c.sysauth, c.seq, c.signKey = s.Stok, s.Sysauth, s.Seq, key
+	c.aes = aesCBC{key: s.AESKey, iv: s.AESIV}
+	sum := md5.Sum([]byte(c.username + c.password))
+	c.hash = hex.EncodeToString(sum[:])
+	return nil
 }
 
 func unwrap(raw []byte) (json.RawMessage, error) {

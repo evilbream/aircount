@@ -16,9 +16,10 @@ import (
 type Topic string
 
 const (
-	TopicRawDetections Topic = "raw.detections"
-	TopicRawCSI        Topic = "raw.csi"
-	TopicPresenceRF    Topic = "presence.rf"
+	TopicRawDetections  Topic = "raw.detections"
+	TopicRawCSI         Topic = "raw.csi"
+	TopicPresenceRF     Topic = "presence.rf"
+	TopicRouterSnapshot Topic = "router.snapshot"
 )
 
 var (
@@ -46,6 +47,8 @@ var specs = map[Topic]TopicSpec{
 	TopicRawCSI: {Name: string(TopicRawCSI), Partitions: 3, Replicas: 1,
 		Configs: makeConfig("3600000", "delete", "1800000")}, // 1 hour retention, 30 minutes segment
 	TopicPresenceRF: {Name: string(TopicPresenceRF), Partitions: 1, Replicas: 1,
+		Configs: makeConfig("86400000", "delete", "21600000")}, // 24 hour retention, 6 hours segment
+	TopicRouterSnapshot: {Name: string(TopicRouterSnapshot), Partitions: 1, Replicas: 1,
 		Configs: makeConfig("86400000", "delete", "21600000")}, // 24 hour retention, 6 hours segment
 }
 

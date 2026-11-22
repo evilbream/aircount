@@ -25,7 +25,7 @@ import (
 
 func main() {
 	if platform.Detect() == platform.Local {
-		if err := system.EnsureEnvLoaded(".env.local"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := system.LoadLocalEnv(); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Fatal().Err(err).Msg("failed to load .env.local")
 		}
 	}
@@ -64,6 +64,7 @@ func main() {
 	log.Info().Msg("connected to ClickHouse")
 
 	writer := clickhouse.NewWriter(conn)
+	writer.SwitchCSI(true)
 	// reader := clickhouse.NewReader(conn)
 
 	publisher := kafka.NewProducer(kClient, enc)

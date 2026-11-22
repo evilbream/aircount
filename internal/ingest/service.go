@@ -5,6 +5,7 @@ import (
 	"errors"
 	"poltergeist/internal/domain"
 	"poltergeist/internal/sensorwire"
+	"poltergeist/internal/system"
 	"time"
 )
 
@@ -22,15 +23,9 @@ type Service struct {
 	clock     Clock
 }
 
-type systemClock struct{}
-
-func (c *systemClock) Now() time.Time {
-	return time.Now()
-}
-
 func NewService(publisher Publisher, clock Clock) *Service {
 	if clock == nil {
-		clock = &systemClock{}
+		clock = &system.SystemClock{}
 	}
 	return &Service{
 		publisher: publisher,

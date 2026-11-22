@@ -1,0 +1,46 @@
+syntax = "proto3";
+package aircount.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "poltergeist/internal/pb/aircount/v1;aircountv1";
+
+
+// One poll of the router: status + currently connected clients.
+message RouterSnapshot {
+    string router_id = 1;
+    google.protobuf.Timestamp observed_at = 2;
+    double cpu_usage = 3; // 0..1
+    double mem_usage = 4; // 0..1
+    string wan_ip = 5;
+    uint32 clients_online = 6;
+    uint32 clients_guest = 7;
+    repeated RouterClient clients = 8; // connected only
+}
+
+enum Band {
+    BAND_UNSPECIFIED = 0;
+    BAND_WIRED = 1;
+    BAND_2_4G = 2;
+    BAND_5G = 3;
+    BAND_6G = 4;
+}
+
+message RouterClient {
+    string mac_address = 1; // aa:bb:cc:dd:ee:ff, same as sniffer Device.mac
+    string ip_address = 2;
+    string hostname = 3;    // DHCP hostname or the name set in the router UI
+    bool is_guest = 4;
+    string kind = 5;        // router UI device type: pc, phone, other, ...
+    Band band = 6;
+
+    sint32 signal_dbm = 7;                      // RSSI at the router; 0 for wired
+    google.protobuf.Timestamp connected_at = 8; // observed_at - onlineTime
+
+    uint64 traffic_bytes = 9;           // total since connected
+    uint64 upload_bytes_per_sec = 10;   // current speed
+    uint64 download_bytes_per_sec = 11;
+
+    double tx_mbps = 12; // Wi-Fi PHY link rate router->client; 0 for wired
+    double rx_mbps = 13; // Wi-Fi PHY link rate client->router; 0 for wired
+}

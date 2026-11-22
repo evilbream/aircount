@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
 	"poltergeist/internal/domain"
 	aircountv1 "poltergeist/internal/pb/aircount/v1"
 
@@ -26,6 +28,7 @@ const (
 	csiMsgIndex            = 0
 	detectionBatchMsgIndex = 1
 	presenceRFMsgIndex     = 0
+	routerSnapshotMsgIndex = 0
 )
 
 var confluentHeader sr.ConfluentHeader
@@ -37,9 +40,10 @@ type schemaSpec struct {
 }
 
 var topicSchemas = map[Topic]schemaSpec{
-	TopicRawDetections: {proto: aircountv1.DetectionProto, index: detectionBatchMsgIndex, message: &aircountv1.DetectionBatch{}},
-	TopicRawCSI:        {proto: aircountv1.CSIProto, index: csiMsgIndex, message: &aircountv1.CSI{}},
-	TopicPresenceRF:    {proto: aircountv1.PresenceRFProto, index: presenceRFMsgIndex, message: &aircountv1.PresenceRF{}},
+	TopicRawDetections:  {proto: aircountv1.DetectionProto, index: detectionBatchMsgIndex, message: &aircountv1.DetectionBatch{}},
+	TopicRawCSI:         {proto: aircountv1.CSIProto, index: csiMsgIndex, message: &aircountv1.CSI{}},
+	TopicPresenceRF:     {proto: aircountv1.PresenceRFProto, index: presenceRFMsgIndex, message: &aircountv1.PresenceRF{}},
+	TopicRouterSnapshot: {proto: aircountv1.RouterSnapshotProto, index: routerSnapshotMsgIndex, message: &aircountv1.RouterSnapshot{}},
 }
 
 type Encoder struct {
@@ -86,6 +90,125 @@ func newEncoder(topicIds map[Topic]int) (*Encoder, error) {
 	}
 
 	return &Encoder{serde: &s}, nil
+}
+
+func (e *Encoder) EncodeRouterSnapshot(s *domain.RouterSnapshot) ([]byte, error) {
+	pb := &aircountv1.RouterSnapshot{
+		ObservedAt:    timestamppb.New(s.ObservedAt),
+		CpuUsage:      s.CPU,
+		MemUsage:      s.Mem,
+		WanIp:         s.WANIP,
+		ClientsOnline: uint32(len(s.Clients)),
+		Clients:       make([]*aircountv1.RouterClient, len(s.Clients)),
+	}
+	for i, c := range s.Clients {
+		if c.Guest {
+			pb.ClientsGuest++
+		}
+		pb.Clients[i] = &aircountv1.RouterClient{
+			MacAddress:          c.MAC,
+			IpAddress:           c.IP,
+			Hostname:            c.Name,
+			IsGuest:             c.Guest,
+			Kind:                c.Kind,
+			Band:                bandToProto(c.Band),
+			SignalDbm:           int32(c.SignalDBm),
+			ConnectedAt:         timestampOrNil(c.ConnectedAt),
+			TrafficBytes:        c.TrafficBytes,
+			UploadBytesPerSec:   c.UpBps,
+			DownloadBytesPerSec: c.DownBps,
+			TxMbps:              c.TxMbps,
+			RxMbps:              c.RxMbps,
+		}
+	}
+	return e.serde.Encode(pb)
+}
+
+// DecodeRouterSnapshot ignores router_id and clients_online/clients_guest:
+// the domain type has no place for the former and derives the latter from Clients.
+func (e *Encoder) DecodeRouterSnapshot(data []byte) (*domain.RouterSnapshot, error) {
+	payload, err := stripWireFormat(data, routerSnapshotMsgIndex)
+	if err != nil {
+		return nil, err
+	}
+	var m aircountv1.RouterSnapshot
+	if err := proto.Unmarshal(payload, &m); err != nil {
+		return nil, err
+	}
+	observedAt := m.GetObservedAt()
+	if observedAt == nil {
+		return nil, ErrMissingObservedAt
+	}
+	clients := make([]domain.RouterClient, len(m.Clients))
+	for i, c := range m.Clients {
+		clients[i] = domain.RouterClient{
+			MAC:          c.GetMacAddress(),
+			IP:           c.GetIpAddress(),
+			Name:         c.GetHostname(),
+			Kind:         c.GetKind(),
+			Band:         bandFromProto(c.GetBand()),
+			Guest:        c.GetIsGuest(),
+			SignalDBm:    int(c.GetSignalDbm()),
+			ConnectedAt:  timeOrZero(c.GetConnectedAt()),
+			TrafficBytes: c.GetTrafficBytes(),
+			UpBps:        c.GetUploadBytesPerSec(),
+			DownBps:      c.GetDownloadBytesPerSec(),
+			TxMbps:       c.GetTxMbps(),
+			RxMbps:       c.GetRxMbps(),
+		}
+	}
+	return &domain.RouterSnapshot{
+		ObservedAt: observedAt.AsTime(),
+		CPU:        m.GetCpuUsage(),
+		Mem:        m.GetMemUsage(),
+		WANIP:      m.GetWanIp(),
+		Clients:    clients,
+	}, nil
+}
+
+func bandToProto(b domain.Band) aircountv1.Band {
+	switch b {
+	case domain.BandWired:
+		return aircountv1.Band_BAND_WIRED
+	case domain.Band24:
+		return aircountv1.Band_BAND_2_4G
+	case domain.Band5:
+		return aircountv1.Band_BAND_5G
+	case domain.Band6:
+		return aircountv1.Band_BAND_6G
+	default:
+		return aircountv1.Band_BAND_UNSPECIFIED
+	}
+}
+
+func bandFromProto(b aircountv1.Band) domain.Band {
+	switch b {
+	case aircountv1.Band_BAND_WIRED:
+		return domain.BandWired
+	case aircountv1.Band_BAND_2_4G:
+		return domain.Band24
+	case aircountv1.Band_BAND_5G:
+		return domain.Band5
+	case aircountv1.Band_BAND_6G:
+		return domain.Band6
+	default:
+		return ""
+	}
+}
+
+// timestampOrNil keeps an unknown time off the wire instead of encoding year 1.
+func timestampOrNil(t time.Time) *timestamppb.Timestamp {
+	if t.IsZero() {
+		return nil
+	}
+	return timestamppb.New(t)
+}
+
+func timeOrZero(ts *timestamppb.Timestamp) time.Time {
+	if ts == nil {
+		return time.Time{}
+	}
+	return ts.AsTime()
 }
 
 func (e *Encoder) EncodeCSIWindow(csi *domain.CSIWindow) ([]byte, error) {

@@ -10,3 +10,6 @@ var CSIProto string
 
 //go:embed presence.proto
 var PresenceRFProto string
+
+//go:embed router.proto
+var RouterSnapshotProto string

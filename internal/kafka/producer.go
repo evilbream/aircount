@@ -56,3 +56,16 @@ func (p *Producer) PublishPresence(ctx context.Context, presence domain.Presence
 	}
 	return p.client.ProduceSync(ctx, record).FirstErr()
 }
+
+func (p *Producer) PublishRouterSnapshot(ctx context.Context, snapshot domain.RouterSnapshot) error {
+	value, err := p.enc.EncodeRouterSnapshot(&snapshot)
+	if err != nil {
+		return err
+	}
+	record := &kgo.Record{
+		Topic: string(TopicRouterSnapshot),
+		Key:   []byte("router-snapshot"),
+		Value: value,
+	}
+	return p.client.ProduceSync(ctx, record).FirstErr()
+}

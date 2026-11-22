@@ -14,10 +14,36 @@ services:
       MQTT_TOPIC: aircount/+/batch
       PORT: ${PORT:-8080}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-maindb}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-maindb}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-localhost}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
       KAFKA_SCHEMA_REGISTRY_URL: ${KAFKA_SCHEMA_REGISTRY_URL:-http://localhost:8085}
       KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
       SENSORS: ${SENSORS:-living-room,bedroom,kitchen}
+
+  router-poller:
+    build:
+      context: ..
+      dockerfile: cmd/router-poller/Dockerfile
+    container_name: router-poller
+    restart: unless-stopped
+    environment:
+      PLATFORM: docker
+      PORT: ${PORT-POLLER:-8083}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-maindb}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-localhost}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
+      KAFKA_SCHEMA_REGISTRY_URL: ${KAFKA_SCHEMA_REGISTRY_URL:-http://localhost:8085}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
+      ROUTER_HOST: ${ROUTER_HOST:-http://192.168.0.1}
+      ROUTER_USERNAME: ${ROUTER_USERNAME:-admin}
+      ROUTER_PASSWORD: ${ROUTER_PASSWORD:-admin}
+      ROUTER_POLL_INTERVAL: ${ROUTER_POLL_INTERVAL:-30s}
+    volumes:
+      - router-poller-tmp:/tmp
+
+volumes:
+  router-poller-tmp:
