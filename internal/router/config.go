@@ -13,7 +13,7 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	port := system.EnvInt("PORT", int(system.PortRouterPoller))
+	port := system.EnvInt("PORT-POLLER", int(system.PortRouterPoller))
 
 	cfg := Config{
 		Router:     config.LoadRouter(),
