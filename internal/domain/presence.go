@@ -80,3 +80,12 @@ type DevicePresence struct {
 	Guest     bool
 	RandomMAC bool // locally administered bit: phone private MAC
 }
+
+type DeviceState struct {
+	MAC              string
+	ObservedAt       time.Time // decision time
+	Online           bool
+	PresenceDetected bool
+	MotionRooms      []string // sensor IDs that reported motion; source of PresenceDetected
+	Score            float64  // max RF score across MotionRooms
+}

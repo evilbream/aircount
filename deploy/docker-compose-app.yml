@@ -56,5 +56,21 @@ services:
       KAFKA_SCHEMA_REGISTRY_URL: ${KAFKA_SCHEMA_REGISTRY_URL:-http://localhost:8085}
       KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
 
+  alert:
+    build:
+      context: ..
+      dockerfile: cmd/alert/Dockerfile
+    container_name: alert
+    restart: unless-stopped
+    environment:
+      PLATFORM: docker
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-maindb}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-localhost}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
+      KAFKA_SCHEMA_REGISTRY_URL: ${KAFKA_SCHEMA_REGISTRY_URL:-http://localhost:8085}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
+
 volumes:
   router-poller-tmp:

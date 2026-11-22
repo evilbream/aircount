@@ -35,6 +35,17 @@ var routerStatusTable = table[domain.RouterSnapshot]{
 	},
 }
 
+var deviceStateTable = table[domain.DeviceState]{
+	query: "INSERT INTO maindb.device_state (mac, observed_at, online, presence_detected, motion_rooms, score)",
+	appendRow: func(b driver.Batch, s domain.DeviceState) error {
+		rooms := s.MotionRooms
+		if rooms == nil {
+			rooms = []string{}
+		}
+		return b.Append(s.MAC, s.ObservedAt, s.Online, s.PresenceDetected, rooms, float32(s.Score))
+	},
+}
+
 type clientRow struct {
 	ObservedAt time.Time
 	domain.RouterClient

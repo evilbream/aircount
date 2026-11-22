@@ -10,11 +10,13 @@ import (
 )
 
 type Writer struct {
-	csi         *BatchWriter[domain.CSIWindow]
-	snapshot    *BatchWriter[domain.RouterSnapshot]
-	clients     *BatchWriter[clientRow]
-	runCSI      bool
-	runSnapshot bool
+	csi            *BatchWriter[domain.CSIWindow]
+	snapshot       *BatchWriter[domain.RouterSnapshot]
+	clients        *BatchWriter[clientRow]
+	deviceState    *BatchWriter[domain.DeviceState]
+	runCSI         bool
+	runSnapshot    bool
+	runDeviceState bool
 }
 
 func (w *Writer) PublishCSI(ctx context.Context, csi domain.CSIWindow) error {
@@ -38,11 +40,17 @@ func (w *Writer) PublishRouterSnapshot(ctx context.Context, s domain.RouterSnaps
 	return nil
 }
 
+func (w *Writer) PublishDeviceState(ctx context.Context, hs domain.DeviceState) error {
+	w.deviceState.Add(hs)
+	return nil
+}
+
 func NewWriter(conn driver.Conn) *Writer {
 	return &Writer{
 		csi:         NewBatchWriter(conn, csiTable),
 		snapshot:    NewBatchWriter(conn, routerStatusTable),
 		clients:     NewBatchWriter(conn, routerClientsTable),
+		deviceState: NewBatchWriter(conn, deviceStateTable),
 		runCSI:      false,
 		runSnapshot: false,
 	}
@@ -56,8 +64,12 @@ func (w *Writer) SwitchRouterSnapshot(enable bool) {
 	w.runSnapshot = enable
 }
 
+func (w *Writer) SwitchDeviceState(enable bool) {
+	w.runDeviceState = enable
+}
+
 func (w *Writer) Run(ctx context.Context) error {
-	if !w.runCSI && !w.runSnapshot {
+	if !w.runCSI && !w.runSnapshot && !w.runDeviceState {
 		log.Info().Msg("clickhouse writer: no writers enabled, exiting")
 		return nil
 	}
@@ -69,6 +81,10 @@ func (w *Writer) Run(ctx context.Context) error {
 	if w.runSnapshot {
 		g.Go(func() error { return w.snapshot.Run(ctx) })
 		g.Go(func() error { return w.clients.Run(ctx) })
+	}
+
+	if w.runDeviceState {
+		g.Go(func() error { return w.deviceState.Run(ctx) })
 	}
 
 	return g.Wait()

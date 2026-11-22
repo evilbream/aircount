@@ -13,9 +13,9 @@ type Consumer struct {
 	enc    *Encoder
 }
 type CSIWindowHandler = func(ctx context.Context, presence *domain.CSIWindow) error
-
 type PresenceRFHandler = func(ctx context.Context, presence *domain.PresenceRF) error
 type RouterSnapshotHandler = func(ctx context.Context, s *domain.RouterSnapshot) error
+type PresenceDeviceHandler = func(ctx context.Context, d *domain.DevicePresence) error
 
 func NewConsumer(client *kgo.Client, encoder *Encoder) *Consumer {
 	return &Consumer{client: client, enc: encoder}
@@ -40,9 +40,11 @@ func consume[T any](ctx context.Context, c *Consumer, decode func([]byte) (*T, e
 		for !iter.Done() {
 			record := iter.Next()
 
-			w, err := decode(record.Value)
-			if err != nil {
-				log.Warn().Err(err).Str("topic", record.Topic).Int32("partition", record.Partition).Int64("offset", record.Offset).Msg("failed to decode CSI window")
+			if record.Value == nil { // compaction tombstone: key deleted, nothing to decode
+				log.Debug().Str("topic", record.Topic).Bytes("key", record.Key).Msg("tombstone, skipping")
+			} else if w, err := decode(record.Value); err != nil {
+				log.Warn().Err(err).Str("topic", record.Topic).Int32("partition", record.Partition).
+					Int64("offset", record.Offset).Msg("failed to decode record")
 			} else if err := handler(ctx, w); err != nil {
 				return err // no commit, retry
 			}
@@ -65,4 +67,8 @@ func (c *Consumer) ConsumePresenceRF(ctx context.Context, handler PresenceRFHand
 
 func (c *Consumer) ConsumeSnapshot(ctx context.Context, handler RouterSnapshotHandler) error {
 	return consume(ctx, c, c.enc.DecodeRouterSnapshot, handler)
+}
+
+func (c *Consumer) ConsumeDevicePresence(ctx context.Context, handler PresenceDeviceHandler) error {
+	return consume(ctx, c, c.enc.DecodeDevicePresence, handler)
 }

@@ -26,3 +26,24 @@ func Load() (Config, error) {
 
 	return cfg, nil
 }
+
+type AlertConfig struct {
+	Kafka      config.Kafka
+	ClickHouse config.ClickHouse
+}
+
+func LoadAlert() (AlertConfig, error) {
+	cfg := AlertConfig{
+		Kafka:      config.LoadKafka("alert"),
+		ClickHouse: config.LoadClickHouse(),
+	}
+
+	if err := cfg.Kafka.Validate(); err != nil {
+		return AlertConfig{}, err
+	}
+	if err := cfg.ClickHouse.Validate(); err != nil {
+		return AlertConfig{}, err
+	}
+
+	return cfg, nil
+}
