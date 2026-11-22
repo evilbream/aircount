@@ -1,4 +1,4 @@
-package csiprocessor
+package presenceprocessor
 
 import (
 	"context"
@@ -26,7 +26,6 @@ type Consumer interface {
 }
 
 type Service struct {
-	EnableHTTP bool // enables the HTTP server for the CSI processor service
 	publisher  Publisher
 	consumer   Consumer
 	WindowSpan time.Duration

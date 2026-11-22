@@ -1,4 +1,4 @@
-package csiprocessor
+package presenceprocessor
 
 import "testing"
 

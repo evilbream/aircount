@@ -69,3 +69,22 @@ func (p *Producer) PublishRouterSnapshot(ctx context.Context, snapshot domain.Ro
 	}
 	return p.client.ProduceSync(ctx, record).FirstErr()
 }
+
+func (p *Producer) PublishDevicePresence(ctx context.Context, devices ...domain.DevicePresence) error {
+	if len(devices) == 0 {
+		return nil
+	}
+	records := make([]*kgo.Record, 0, len(devices))
+	for i := range devices {
+		value, err := p.enc.EncodeDevicePresence(&devices[i])
+		if err != nil {
+			return err
+		}
+		records = append(records, &kgo.Record{
+			Topic: string(TopicPresenceDevice),
+			Key:   []byte(devices[i].MAC),
+			Value: value,
+		})
+	}
+	return p.client.ProduceSync(ctx, records...).FirstErr()
+}

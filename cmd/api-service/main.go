@@ -7,11 +7,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	csiprocessor "poltergeist/internal/csi-processor"
 	"poltergeist/internal/domain"
 	"poltergeist/internal/httpapi"
 	"poltergeist/internal/kafka"
 	"poltergeist/internal/platform"
+	presenceprocessor "poltergeist/internal/presence-processor"
 	"poltergeist/internal/system"
 	"poltergeist/internal/uiwire"
 	"poltergeist/internal/ws"
@@ -28,7 +28,7 @@ func main() {
 		}
 	}
 	platform.SetupLogging()
-	appCfg, err := csiprocessor.Load()
+	appCfg, err := presenceprocessor.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to load config")
 	}

@@ -20,6 +20,7 @@ const (
 	TopicRawCSI         Topic = "raw.csi"
 	TopicPresenceRF     Topic = "presence.rf"
 	TopicRouterSnapshot Topic = "router.snapshot"
+	TopicPresenceDevice Topic = "presence.device"
 )
 
 var (
@@ -50,6 +51,13 @@ var specs = map[Topic]TopicSpec{
 		Configs: makeConfig("86400000", "delete", "21600000")}, // 24 hour retention, 6 hours segment
 	TopicRouterSnapshot: {Name: string(TopicRouterSnapshot), Partitions: 1, Replicas: 1,
 		Configs: makeConfig("86400000", "delete", "21600000")}, // 24 hour retention, 6 hours segment
+	TopicPresenceDevice: {Name: string(TopicPresenceDevice), Partitions: 1, Replicas: 1,
+		Configs: map[string]*string{
+			"cleanup.policy":      new("compact"),
+			"segment.ms":          new("3600000"),
+			"delete.retention.ms": new("86400000"),
+		},
+	},
 }
 
 func EnsureTopics(ctx context.Context, cl *kgo.Client, topics ...Topic) error {

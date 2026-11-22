@@ -12,6 +12,7 @@ import (
 
 type Publisher interface {
 	PublishRouterSnapshot(ctx context.Context, snapshot domain.RouterSnapshot) error
+	// PublishDevicePresence(ctx context.Context, snapshot domain.RouterSnapshot)
 }
 
 type Router interface {

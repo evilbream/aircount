@@ -15,3 +15,25 @@ message PresenceRF {
     google.protobuf.Duration  window      = 5;
     uint32 packets     = 6;
 }
+
+message DevicePresence {
+    string mac_address = 1;    // same as the record key, so the value is self-contained
+    PresenceState presence_state = 2;
+
+    google.protobuf.Timestamp changed_at = 3;   // in this state since: online since / offline since
+    google.protobuf.Timestamp last_seen_at = 4; // last observation by the source
+    google.protobuf.Timestamp observed_at = 5;  // when this record was produced
+
+    // Last known identity, kept as is on OFFLINE.
+    string hostname = 6;
+    string kind = 7;         // phone, pc, other... from the router UI
+    string ip_address = 8;
+    bool is_guest = 9;
+    bool is_random_mac = 10; // locally administered bit: phone private MAC
+}
+
+enum PresenceState {
+    PRESENCE_STATE_UNSPECIFIED = 0;
+    PRESENCE_STATE_ONLINE = 1;
+    PRESENCE_STATE_OFFLINE = 2;
+}

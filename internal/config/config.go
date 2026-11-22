@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -86,14 +88,56 @@ func (m MQTT) Validate() error {
 }
 
 type Postgres struct {
-	DSN string // POSTGRES_DSN, e.g. postgres://user:pass@host:5432/db
+	Host     string // POSTGRES_HOST
+	Port     int    // POSTGRES_PORT
+	User     string // POSTGRES_USER
+	Password string // POSTGRES_PASSWORD
+	Database string // POSTGRES_DB
+	SSLMode  string // POSTGRES_SSLMODE: disable, require, verify-full...
+	DSN      string // POSTGRES_DSN, if set, wins over the fields above
 }
 
 func LoadPostgres() Postgres {
-	return Postgres{DSN: system.EnvDefault("POSTGRES_DSN", "")}
+	p := Postgres{
+		Host:     system.EnvDefault("POSTGRES_HOST", "localhost"),
+		Port:     system.EnvDefaultInt("POSTGRES_PORT", 5432),
+		User:     system.EnvDefault("POSTGRES_USER", "admin"),
+		Password: system.EnvDefault("POSTGRES_PASSWORD", "admin"),
+		Database: system.EnvDefault("POSTGRES_DB", "maindb"),
+		SSLMode:  system.EnvDefault("POSTGRES_SSLMODE", "disable"),
+	}
+	p.DSN = system.EnvDefault("POSTGRES_DSN", p.buildDSN())
+	return p
+}
+
+// buildDSN escapes user and password, so special characters in them are safe.
+func (p Postgres) buildDSN() string {
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(p.User, p.Password),
+		Host:     net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),
+		Path:     "/" + p.Database,
+		RawQuery: url.Values{"sslmode": {p.SSLMode}}.Encode(),
+	}
+	return u.String()
 }
 
 func (p Postgres) Validate() error {
+	if strings.TrimSpace(p.Host) == "" {
+		return fmt.Errorf("postgres: host is empty (set POSTGRES_HOST)")
+	}
+	if p.Port <= 0 {
+		return fmt.Errorf("postgres: port is invalid (set POSTGRES_PORT)")
+	}
+	if strings.TrimSpace(p.User) == "" {
+		return fmt.Errorf("postgres: user is empty (set POSTGRES_USER)")
+	}
+	if strings.TrimSpace(p.Password) == "" {
+		return fmt.Errorf("postgres: password is empty (set POSTGRES_PASSWORD)")
+	}
+	if strings.TrimSpace(p.Database) == "" {
+		return fmt.Errorf("postgres: database is empty (set POSTGRES_DB)")
+	}
 	if strings.TrimSpace(p.DSN) == "" {
 		return fmt.Errorf("postgres: DSN is empty (set POSTGRES_DSN)")
 	}

@@ -23,6 +23,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type PresenceState int32
+
+const (
+	PresenceState_PRESENCE_STATE_UNSPECIFIED PresenceState = 0
+	PresenceState_PRESENCE_STATE_ONLINE      PresenceState = 1
+	PresenceState_PRESENCE_STATE_OFFLINE     PresenceState = 2
+)
+
+// Enum value maps for PresenceState.
+var (
+	PresenceState_name = map[int32]string{
+		0: "PRESENCE_STATE_UNSPECIFIED",
+		1: "PRESENCE_STATE_ONLINE",
+		2: "PRESENCE_STATE_OFFLINE",
+	}
+	PresenceState_value = map[string]int32{
+		"PRESENCE_STATE_UNSPECIFIED": 0,
+		"PRESENCE_STATE_ONLINE":      1,
+		"PRESENCE_STATE_OFFLINE":     2,
+	}
+)
+
+func (x PresenceState) Enum() *PresenceState {
+	p := new(PresenceState)
+	*p = x
+	return p
+}
+
+func (x PresenceState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PresenceState) Descriptor() protoreflect.EnumDescriptor {
+	return file_aircount_v1_presence_proto_enumTypes[0].Descriptor()
+}
+
+func (PresenceState) Type() protoreflect.EnumType {
+	return &file_aircount_v1_presence_proto_enumTypes[0]
+}
+
+func (x PresenceState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PresenceState.Descriptor instead.
+func (PresenceState) EnumDescriptor() ([]byte, []int) {
+	return file_aircount_v1_presence_proto_rawDescGZIP(), []int{0}
+}
+
 type PresenceRF struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	SensorId       string                 `protobuf:"bytes,1,opt,name=sensor_id,json=sensorId,proto3" json:"sensor_id,omitempty"`
@@ -107,6 +156,123 @@ func (x *PresenceRF) GetPackets() uint32 {
 	return 0
 }
 
+type DevicePresence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MacAddress    string                 `protobuf:"bytes,1,opt,name=mac_address,json=macAddress,proto3" json:"mac_address,omitempty"` // same as the record key, so the value is self-contained
+	PresenceState PresenceState          `protobuf:"varint,2,opt,name=presence_state,json=presenceState,proto3,enum=aircount.v1.PresenceState" json:"presence_state,omitempty"`
+	ChangedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=changed_at,json=changedAt,proto3" json:"changed_at,omitempty"`      // in this state since: online since / offline since
+	LastSeenAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"` // last observation by the source
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`   // when this record was produced
+	// Last known identity, kept as is on OFFLINE.
+	Hostname      string `protobuf:"bytes,6,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Kind          string `protobuf:"bytes,7,opt,name=kind,proto3" json:"kind,omitempty"` // phone, pc, other... from the router UI
+	IpAddress     string `protobuf:"bytes,8,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`
+	IsGuest       bool   `protobuf:"varint,9,opt,name=is_guest,json=isGuest,proto3" json:"is_guest,omitempty"`
+	IsRandomMac   bool   `protobuf:"varint,10,opt,name=is_random_mac,json=isRandomMac,proto3" json:"is_random_mac,omitempty"` // locally administered bit: phone private MAC
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DevicePresence) Reset() {
+	*x = DevicePresence{}
+	mi := &file_aircount_v1_presence_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DevicePresence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DevicePresence) ProtoMessage() {}
+
+func (x *DevicePresence) ProtoReflect() protoreflect.Message {
+	mi := &file_aircount_v1_presence_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DevicePresence.ProtoReflect.Descriptor instead.
+func (*DevicePresence) Descriptor() ([]byte, []int) {
+	return file_aircount_v1_presence_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *DevicePresence) GetMacAddress() string {
+	if x != nil {
+		return x.MacAddress
+	}
+	return ""
+}
+
+func (x *DevicePresence) GetPresenceState() PresenceState {
+	if x != nil {
+		return x.PresenceState
+	}
+	return PresenceState_PRESENCE_STATE_UNSPECIFIED
+}
+
+func (x *DevicePresence) GetChangedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ChangedAt
+	}
+	return nil
+}
+
+func (x *DevicePresence) GetLastSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeenAt
+	}
+	return nil
+}
+
+func (x *DevicePresence) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
+func (x *DevicePresence) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *DevicePresence) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *DevicePresence) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+func (x *DevicePresence) GetIsGuest() bool {
+	if x != nil {
+		return x.IsGuest
+	}
+	return false
+}
+
+func (x *DevicePresence) GetIsRandomMac() bool {
+	if x != nil {
+		return x.IsRandomMac
+	}
+	return false
+}
+
 var File_aircount_v1_presence_proto protoreflect.FileDescriptor
 
 const file_aircount_v1_presence_proto_rawDesc = "" +
@@ -120,7 +286,28 @@ const file_aircount_v1_presence_proto_rawDesc = "" +
 	"\vobserved_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"observedAt\x121\n" +
 	"\x06window\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\x06window\x12\x18\n" +
-	"\apackets\x18\x06 \x01(\rR\apacketsB0Z.poltergeist/internal/pb/aircount/v1;aircountv1b\x06proto3"
+	"\apackets\x18\x06 \x01(\rR\apackets\"\xb8\x03\n" +
+	"\x0eDevicePresence\x12\x1f\n" +
+	"\vmac_address\x18\x01 \x01(\tR\n" +
+	"macAddress\x12A\n" +
+	"\x0epresence_state\x18\x02 \x01(\x0e2\x1a.aircount.v1.PresenceStateR\rpresenceState\x129\n" +
+	"\n" +
+	"changed_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tchangedAt\x12<\n" +
+	"\flast_seen_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastSeenAt\x12;\n" +
+	"\vobserved_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\x12\x1a\n" +
+	"\bhostname\x18\x06 \x01(\tR\bhostname\x12\x12\n" +
+	"\x04kind\x18\a \x01(\tR\x04kind\x12\x1d\n" +
+	"\n" +
+	"ip_address\x18\b \x01(\tR\tipAddress\x12\x19\n" +
+	"\bis_guest\x18\t \x01(\bR\aisGuest\x12\"\n" +
+	"\ris_random_mac\x18\n" +
+	" \x01(\bR\visRandomMac*f\n" +
+	"\rPresenceState\x12\x1e\n" +
+	"\x1aPRESENCE_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15PRESENCE_STATE_ONLINE\x10\x01\x12\x1a\n" +
+	"\x16PRESENCE_STATE_OFFLINE\x10\x02B0Z.poltergeist/internal/pb/aircount/v1;aircountv1b\x06proto3"
 
 var (
 	file_aircount_v1_presence_proto_rawDescOnce sync.Once
@@ -134,20 +321,27 @@ func file_aircount_v1_presence_proto_rawDescGZIP() []byte {
 	return file_aircount_v1_presence_proto_rawDescData
 }
 
-var file_aircount_v1_presence_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_aircount_v1_presence_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_aircount_v1_presence_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_aircount_v1_presence_proto_goTypes = []any{
-	(*PresenceRF)(nil),            // 0: aircount.v1.PresenceRF
-	(*timestamppb.Timestamp)(nil), // 1: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 2: google.protobuf.Duration
+	(PresenceState)(0),            // 0: aircount.v1.PresenceState
+	(*PresenceRF)(nil),            // 1: aircount.v1.PresenceRF
+	(*DevicePresence)(nil),        // 2: aircount.v1.DevicePresence
+	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),   // 4: google.protobuf.Duration
 }
 var file_aircount_v1_presence_proto_depIdxs = []int32{
-	1, // 0: aircount.v1.PresenceRF.observed_at:type_name -> google.protobuf.Timestamp
-	2, // 1: aircount.v1.PresenceRF.window:type_name -> google.protobuf.Duration
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 0: aircount.v1.PresenceRF.observed_at:type_name -> google.protobuf.Timestamp
+	4, // 1: aircount.v1.PresenceRF.window:type_name -> google.protobuf.Duration
+	0, // 2: aircount.v1.DevicePresence.presence_state:type_name -> aircount.v1.PresenceState
+	3, // 3: aircount.v1.DevicePresence.changed_at:type_name -> google.protobuf.Timestamp
+	3, // 4: aircount.v1.DevicePresence.last_seen_at:type_name -> google.protobuf.Timestamp
+	3, // 5: aircount.v1.DevicePresence.observed_at:type_name -> google.protobuf.Timestamp
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_aircount_v1_presence_proto_init() }
@@ -160,13 +354,14 @@ func file_aircount_v1_presence_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_aircount_v1_presence_proto_rawDesc), len(file_aircount_v1_presence_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   1,
+			NumEnums:      1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_aircount_v1_presence_proto_goTypes,
 		DependencyIndexes: file_aircount_v1_presence_proto_depIdxs,
+		EnumInfos:         file_aircount_v1_presence_proto_enumTypes,
 		MessageInfos:      file_aircount_v1_presence_proto_msgTypes,
 	}.Build()
 	File_aircount_v1_presence_proto = out.File

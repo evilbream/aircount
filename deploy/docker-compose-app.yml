@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
     environment:
       PLATFORM: docker
-      PORT: ${PORT-POLLER:-8083}
+      PORT: ${PORT_POLLER:-8083}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aircount}
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-maindb}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-aircount}
@@ -44,6 +44,17 @@ services:
       ROUTER_POLL_INTERVAL: ${ROUTER_POLL_INTERVAL:-30s}
     volumes:
       - router-poller-tmp:/tmp
+
+  presence-processor:
+    build:
+      context: ..
+      dockerfile: cmd/presence-processor/Dockerfile
+    container_name: presence-processor
+    restart: unless-stopped
+    environment:
+      PLATFORM: docker
+      KAFKA_SCHEMA_REGISTRY_URL: ${KAFKA_SCHEMA_REGISTRY_URL:-http://localhost:8085}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-localhost:9092}
 
 volumes:
   router-poller-tmp:

@@ -20,6 +20,7 @@ var (
 	ErrMissingObservedAt = errors.New("missing observed_at timestamp")
 	ErrMissingWindow     = errors.New("missing window duration")
 	ErrWrongMessageType  = errors.New("record carries a different message type")
+	ErrMissingMAC        = errors.New("missing mac_address")
 )
 
 // Positions of the messages inside their .proto files; part of the Confluent
@@ -28,6 +29,7 @@ const (
 	csiMsgIndex            = 0
 	detectionBatchMsgIndex = 1
 	presenceRFMsgIndex     = 0
+	devicePresenceMsgIndex = 1
 	routerSnapshotMsgIndex = 0
 )
 
@@ -44,6 +46,8 @@ var topicSchemas = map[Topic]schemaSpec{
 	TopicRawCSI:         {proto: aircountv1.CSIProto, index: csiMsgIndex, message: &aircountv1.CSI{}},
 	TopicPresenceRF:     {proto: aircountv1.PresenceRFProto, index: presenceRFMsgIndex, message: &aircountv1.PresenceRF{}},
 	TopicRouterSnapshot: {proto: aircountv1.RouterSnapshotProto, index: routerSnapshotMsgIndex, message: &aircountv1.RouterSnapshot{}},
+	// presence.proto holds both PresenceRF and DevicePresence, so the same file is registered.
+	TopicPresenceDevice: {proto: aircountv1.PresenceRFProto, index: devicePresenceMsgIndex, message: &aircountv1.DevicePresence{}},
 }
 
 type Encoder struct {
@@ -124,8 +128,6 @@ func (e *Encoder) EncodeRouterSnapshot(s *domain.RouterSnapshot) ([]byte, error)
 	return e.serde.Encode(pb)
 }
 
-// DecodeRouterSnapshot ignores router_id and clients_online/clients_guest:
-// the domain type has no place for the former and derives the latter from Clients.
 func (e *Encoder) DecodeRouterSnapshot(data []byte) (*domain.RouterSnapshot, error) {
 	payload, err := stripWireFormat(data, routerSnapshotMsgIndex)
 	if err != nil {
@@ -308,6 +310,76 @@ func (e *Encoder) DecodeDetectionBatch(data []byte) (*domain.DetectionBatch, err
 		Devices:    devices,
 	}, nil
 
+}
+
+func (e *Encoder) EncodeDevicePresence(p *domain.DevicePresence) ([]byte, error) {
+	pb := &aircountv1.DevicePresence{
+		MacAddress:    p.MAC,
+		PresenceState: presenceStateToProto(p.PresenceState),
+		ChangedAt:     timestampOrNil(p.ChangedAt),
+		LastSeenAt:    timestampOrNil(p.LastSeenAt),
+		ObservedAt:    timestamppb.New(p.ObservedAt),
+		Hostname:      p.Name,
+		Kind:          p.Kind,
+		IpAddress:     p.IP,
+		IsGuest:       p.Guest,
+		IsRandomMac:   p.RandomMAC,
+	}
+	return e.serde.Encode(pb)
+}
+
+// DecodeDevicePresence expects a non-empty value: check record.Value == nil
+// (a compaction tombstone) before calling it.
+func (e *Encoder) DecodeDevicePresence(data []byte) (*domain.DevicePresence, error) {
+	payload, err := stripWireFormat(data, devicePresenceMsgIndex)
+	if err != nil {
+		return nil, err
+	}
+	var m aircountv1.DevicePresence
+	if err := proto.Unmarshal(payload, &m); err != nil {
+		return nil, err
+	}
+	if m.GetMacAddress() == "" {
+		return nil, ErrMissingMAC
+	}
+	observedAt := m.GetObservedAt()
+	if observedAt == nil {
+		return nil, ErrMissingObservedAt
+	}
+	return &domain.DevicePresence{
+		MAC:           m.GetMacAddress(),
+		PresenceState: presenceStateFromProto(m.GetPresenceState()),
+		ChangedAt:     timeOrZero(m.GetChangedAt()),
+		LastSeenAt:    timeOrZero(m.GetLastSeenAt()),
+		ObservedAt:    observedAt.AsTime(),
+		Name:          m.GetHostname(),
+		Kind:          m.GetKind(),
+		IP:            m.GetIpAddress(),
+		Guest:         m.GetIsGuest(),
+		RandomMAC:     m.GetIsRandomMac(),
+	}, nil
+}
+
+func presenceStateToProto(s domain.PresenceState) aircountv1.PresenceState {
+	switch s {
+	case domain.PresenceOnline:
+		return aircountv1.PresenceState_PRESENCE_STATE_ONLINE
+	case domain.PresenceOffline:
+		return aircountv1.PresenceState_PRESENCE_STATE_OFFLINE
+	default:
+		return aircountv1.PresenceState_PRESENCE_STATE_UNSPECIFIED
+	}
+}
+
+func presenceStateFromProto(s aircountv1.PresenceState) domain.PresenceState {
+	switch s {
+	case aircountv1.PresenceState_PRESENCE_STATE_ONLINE:
+		return domain.PresenceOnline
+	case aircountv1.PresenceState_PRESENCE_STATE_OFFLINE:
+		return domain.PresenceOffline
+	default:
+		return domain.PresenceUnspecified
+	}
 }
 
 func (e *Encoder) EncodePresenceRF(p *domain.PresenceRF) ([]byte, error) {

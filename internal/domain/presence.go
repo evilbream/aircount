@@ -57,3 +57,26 @@ func CalcualtePresenceRF(csiWindows []*CSIWindow) PresenceRF {
 		Window:         totalWindow,
 	}
 }
+
+type PresenceState string
+
+const (
+	PresenceUnspecified PresenceState = ""
+	PresenceOnline      PresenceState = "online"
+	PresenceOffline     PresenceState = "offline"
+)
+
+type DevicePresence struct {
+	MAC           string // aa:bb:cc:dd:ee:ff, also the record key
+	PresenceState PresenceState
+
+	ChangedAt  time.Time // when SnifferState or RouterState last changed
+	LastSeenAt time.Time // last observation by any source
+	ObservedAt time.Time // when this record was produced
+
+	Name      string
+	Kind      string
+	IP        string
+	Guest     bool
+	RandomMAC bool // locally administered bit: phone private MAC
+}
