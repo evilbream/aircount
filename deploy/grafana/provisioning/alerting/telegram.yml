@@ -15,6 +15,9 @@ contactPoints:
           message: |
             {{ range .Alerts.Firing }}🚶 <b>{{ .Annotations.summary }}</b>
             {{ .Annotations.description }}
-            📍 {{ .Labels.sensor_id }}
+            {{ if .Labels.sensor_id }}📍 {{ .Labels.sensor_id }}
+            {{ end }}{{ end }}{{ range .Alerts.Resolved }}✅ <b>Отбой: {{ .Annotations.summary }}</b>
+            {{ if .Labels.sensor_id }}📍 {{ .Labels.sensor_id }}
+            {{ end }}🕒 {{ .StartsAt | tz "Asia/Yekaterinburg" | date "15:04" }} – {{ .EndsAt | tz "Asia/Yekaterinburg" | date "15:04" }}
             {{ end }}
-        disableResolveMessage: true
+        disableResolveMessage: false

@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS maindb.router_status (
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(observed_at)
 ORDER BY (observed_at)
-TTL toDateTime(observed_at) + INTERVAL 3 DAY DELETE
+TTL toDateTime(observed_at) + INTERVAL 14 DAY DELETE
 SETTINGS ttl_only_drop_parts = 1;
 
 --router clients table
@@ -31,5 +31,5 @@ CREATE TABLE IF NOT EXISTS maindb.router_clients (
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(observed_at)
 ORDER BY (mac, observed_at)
-TTL toDateTime(observed_at) + INTERVAL 3 DAY DELETE
+TTL toDateTime(observed_at) + INTERVAL 14 DAY DELETE
 SETTINGS ttl_only_drop_parts = 1;

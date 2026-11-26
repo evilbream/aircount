@@ -11,5 +11,5 @@ CREATE TABLE IF NOT EXISTS maindb.csi_windows (
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(observed_at)
 ORDER BY (sensor_id, observed_at)
-TTL toDateTime(observed_at) + INTERVAL 3 DAY DELETE
+TTL toDateTime(observed_at) + INTERVAL 14 DAY DELETE
 SETTINGS ttl_only_drop_parts = 1;
